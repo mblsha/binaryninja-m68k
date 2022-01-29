@@ -27,10 +27,10 @@ from __future__ import print_function
 import struct
 import traceback
 import os
+import capstone
 
-from binaryninja.architecture import Architecture
-from binaryninja.lowlevelil import LowLevelILLabel, LLIL_TEMP
-from binaryninja.function import RegisterInfo, InstructionInfo, InstructionTextToken
+from binaryninja.architecture import Architecture, RegisterInfo, InstructionInfo, InstructionTextToken
+from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP
 from binaryninja.binaryview import BinaryView
 from binaryninja.plugin import PluginCommand
 from binaryninja.interaction import AddressField, ChoiceField, get_form_input
@@ -338,7 +338,7 @@ class OpRegisterIndirect:
 
     def get_dest_il(self, il, value, flags=0):
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectPair:
@@ -416,7 +416,7 @@ class OpRegisterIndirectPostincrement:
 
     def get_dest_il(self, il, value, flags=0):
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectPredecrement:
@@ -456,7 +456,7 @@ class OpRegisterIndirectPredecrement:
 
     def get_dest_il(self, il, value, flags=0):
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectDisplacement:
@@ -507,7 +507,7 @@ class OpRegisterIndirectDisplacement:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectIndex:
@@ -565,7 +565,7 @@ class OpRegisterIndirectIndex:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirect:
@@ -619,7 +619,7 @@ class OpMemoryIndirect:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirectPostindex:
@@ -689,7 +689,7 @@ class OpMemoryIndirectPostindex:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirectPreindex:
@@ -759,7 +759,7 @@ class OpMemoryIndirectPreindex:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpAbsolute:
@@ -796,7 +796,7 @@ class OpAbsolute:
 
     def get_dest_il(self, il, value, flags=0):
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpImmediate:
@@ -851,8 +851,10 @@ ConditionMapping = {
 
 class M68000(Architecture):
     name = "M68000"
-    address_size = 3
+    address_size = 4
     default_int_size = 4
+    # FIXME: is there alignment?
+    # instr_alignment = 1
     max_instr_length = 22
     endianness = Endianness.BigEndian
     regs = {
@@ -1063,7 +1065,7 @@ class M68000(Architecture):
         msb = instruction >> 8
         operation_code = msb >> 4
 
-        #print((hex(addr), hex(instruction)))
+        # print((hex(addr), hex(instruction)))
 
         instr = None
         length = None
@@ -1762,7 +1764,7 @@ class M68000(Architecture):
             #log_error('Bad opcode at 0x{:x}'.format(addr))
             return error_value
 
-        #print((instr, length, size, source, dest, third))
+        # print((instr, length, size, source, dest, third))
         return instr, length, size, source, dest, third
 
     def generate_instruction_il(self, il, instr, length, size, source, dest, third):
@@ -2847,11 +2849,13 @@ class M68000(Architecture):
                 source.get_dest_il(il, il.pop(4))
             )
         elif instr in ('jmp', 'bra'):
-            dstil = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dstil = dest.get_address_il(tmpil)
+            tmpil.append(dstil)
 
             dstlabel = None
-            if il[dstil].operation == LowLevelILOperation.LLIL_CONST:
-                dstlabel = il.get_label_for_address(il.arch, il[dstil].constant)
+            if tmpil[dstil].operation == LowLevelILOperation.LLIL_CONST:
+                dstlabel = il.get_label_for_address(il.arch, tmpil[dstil].constant)
 
             if dstlabel is not None:
                 il.append(
@@ -2859,7 +2863,7 @@ class M68000(Architecture):
                 )
             else:
                 il.append(
-                    il.jump(dstil)
+                    il.jump(dest.get_address_il(il))
                 )
         elif instr in ('jsr', 'bsr'):
             il.append(
@@ -2874,7 +2878,9 @@ class M68000(Architecture):
         elif instr in ('bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
                     'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'):
             flag_cond = ConditionMapping.get(instr[1:], None)
-            dest_il = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dest_il = dest.get_address_il(tmpil)
+            tmpil.append(dest_il)
             cond_il = None
 
             if flag_cond is not None:
@@ -2884,8 +2890,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 t = None
-                if il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                    t = il.get_label_for_address(il.arch, il[dest_il].constant)
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                    t = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
 
                 indirect = False
 
@@ -2907,7 +2913,7 @@ class M68000(Architecture):
 
                 if indirect:
                     il.mark_label(t)
-                    il.append(il.jump(dest_il))
+                    il.append(il.jump(dest.get_address_il(il)))
 
                 if not f_label_found:
                     il.mark_label(f)
@@ -2915,7 +2921,9 @@ class M68000(Architecture):
                     'dbeq', 'dbvc', 'dbvs', 'dbpl', 'dbmi', 'dbge', 'dblt',
                     'dbgt', 'dble'):
             flag_cond = ConditionMapping.get(instr[2:], None)
-            dest_il = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dest_il = dest.get_address_il(tmpil)
+            tmpil.append(dest_il)
             cond_il = None
 
             if flag_cond is not None:
@@ -2929,8 +2937,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 branch = None
-                if il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                    branch = il.get_label_for_address(Architecture['M68000'], il[dest_il].constant)
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                    branch = il.get_label_for_address(Architecture['M68000'], tmpil[dest_il].constant)
 
                 indirect = False
 
@@ -2981,7 +2989,7 @@ class M68000(Architecture):
 
                 if indirect:
                     il.mark_label(branch)
-                    il.append(il.jump(dest_il))
+                    il.append(il.jump(dest.get_address_il(il)))
 
                 if not skip_label_found:
                     il.mark_label(skip)
@@ -3144,7 +3152,7 @@ class M68000(Architecture):
         else:
             il.append(il.unimplemented())
 
-    def perform_get_instruction_info(self, data, addr):
+    def get_instruction_info(self, data, addr):
         instr, length, _size, _source, dest, _third = self.decode_instruction(data, addr)
         if instr == 'unimplemented':
             return None
@@ -3202,7 +3210,12 @@ class M68000(Architecture):
 
         return result
 
-    def perform_get_instruction_text(self, data, addr):
+    def get_instruction_text(self, data, addr):
+        # md = capstone.Cs(capstone.CS_ARCH_M68K, capstone.CS_MODE_BIG_ENDIAN)
+        # for i in md.disasm(data, addr):
+        #     # print("0x%x:\t%s\t%s" %(i.address, i.mnemonic, i.op_str))
+        #     break
+
         instr, length, size, source, dest, third = self.decode_instruction(data, addr)
 
         if size is not None:
@@ -3226,7 +3239,7 @@ class M68000(Architecture):
 
         return tokens, length
 
-    def perform_get_instruction_low_level_il(self, data, addr, il):
+    def get_instruction_low_level_il(self, data, addr, il):
         instr, length, size, source, dest, third = self.decode_instruction(data, addr)
 
         if instr == 'movem':

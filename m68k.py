@@ -1009,6 +1009,7 @@ class M68000(Architecture):
         'dacr0': RegisterInfo('dacr0', 4),
         'dacr1': RegisterInfo('dacr1', 4),
     }
+
     stack_pointer = 'sp'
     flags = ['x', 'n', 'z', 'v', 'c']
     flag_write_types = ['*', 'nzvc']
@@ -3498,105 +3499,105 @@ class M68000(Architecture):
         return None
 
 
-class M68008(M68000):
-    name = "M68008"
+# class M68008(M68000):
+#     name = "M68008"
 
 
-class M68010(M68000):
-    name = "M68010"
-    control_registers = {
-        0x000: 'sfc',
-        0x001: 'dfc',
-        0x800: 'usp',
-        0x801: 'vbr',
-    }
+# class M68010(M68000):
+#     name = "M68010"
+#     control_registers = {
+#         0x000: 'sfc',
+#         0x001: 'dfc',
+#         0x800: 'usp',
+#         0x801: 'vbr',
+#     }
 
     # add BKPT, MOVE from CCR, MOVEC, MOVES, RTD
 
 
-class M68020(M68010):
-    name = "M68020"
-    control_registers = {
-        0x000: 'sfc',
-        0x001: 'dfc',
-        0x800: 'usp',
-        0x801: 'vbr',
-        0x002: 'cacr',
-        0x802: 'caar',
-        0x803: 'msp',
-        0x804: 'isp',
-    }
-    address_size = 4
-    memory_indirect = True
-    movem_store_decremented = True
+# class M68020(M68010):
+#     name = "M68020"
+#     control_registers = {
+#         0x000: 'sfc',
+#         0x001: 'dfc',
+#         0x800: 'usp',
+#         0x801: 'vbr',
+#         0x002: 'cacr',
+#         0x802: 'caar',
+#         0x803: 'msp',
+#         0x804: 'isp',
+#     }
+#     address_size = 4
+#     memory_indirect = True
+#     movem_store_decremented = True
 
     # add BFCHG, BFCLR, BFEXTS, BFEXTU, BFFO, BFINS, BFSET, BFTST, CALLM, CAS, CAS2, CHK2, CMP2, cpBcc, cpDBcc, cpGEN, cpRESTORE, cpSAVE, cpScc, cpTRAPcc
     # DIVSL, DIVUL, EXTB, PACK, RTM, TRAPcc, UNPK
     # add memory indirect addressing
 
 
-class M68030(M68020):
-    name = "M68030"
+# class M68030(M68020):
+#     name = "M68030"
 
     # remove CALLM, RTM
     # add PFLUSH, PFLUSHA, PLOAD, PMOVE, PTEST
 
 
-class M68040(M68030):
-    name = "M68040"
-    control_registers = {
-        0x000: 'sfc',
-        0x001: 'dfc',
-        0x800: 'usp',
-        0x801: 'vbr',
-        0x002: 'cacr',
-        0x803: 'msp',
-        0x804: 'isp',
-        0x003: 'tc',
-        0x004: 'itt0',
-        0x005: 'itt1',
-        0x006: 'dtt0',
-        0x007: 'dtt1',
-        0x805: 'mmusr',
-        0x806: 'urp',
-        0x807: 'srp',
-    }
+# class M68040(M68030):
+#     name = "M68040"
+#     control_registers = {
+#         0x000: 'sfc',
+#         0x001: 'dfc',
+#         0x800: 'usp',
+#         0x801: 'vbr',
+#         0x002: 'cacr',
+#         0x803: 'msp',
+#         0x804: 'isp',
+#         0x003: 'tc',
+#         0x004: 'itt0',
+#         0x005: 'itt1',
+#         0x006: 'dtt0',
+#         0x007: 'dtt1',
+#         0x805: 'mmusr',
+#         0x806: 'urp',
+#         0x807: 'srp',
+#     }
 
     # remove cpBcc, cpDBcc, cpGEN, cpRESTORE, cpSAVE, cpScc, cpTRAPcc, PFLUSHA, PLOAD, PMOVE
     # add CINV, CPUSH, floating point, MOVE16
 
 
-class M68LC040(M68040):
-    name = "M68LC040"
+# class M68LC040(M68040):
+#     name = "M68LC040"
 
 
-class M68EC040(M68040):
-    name = "M68EC040"
-    control_registers = {
-        0x000: 'sfc',
-        0x001: 'dfc',
-        0x800: 'usp',
-        0x801: 'vbr',
-        0x002: 'cacr',
-        0x803: 'msp',
-        0x804: 'isp',
-        0x004: 'iacr0',
-        0x005: 'iacr1',
-        0x006: 'dacr0',
-        0x007: 'dacr1'
-    }
+# class M68EC040(M68040):
+#     name = "M68EC040"
+#     control_registers = {
+#         0x000: 'sfc',
+#         0x001: 'dfc',
+#         0x800: 'usp',
+#         0x801: 'vbr',
+#         0x002: 'cacr',
+#         0x803: 'msp',
+#         0x804: 'isp',
+#         0x004: 'iacr0',
+#         0x005: 'iacr1',
+#         0x006: 'dacr0',
+#         0x007: 'dacr1'
+#     }
 
 
-class M68330(M68010):
-    name = "M68330"
-    movem_store_decremented = True
-    # AKA CPU32
+# class M68330(M68010):
+#     name = "M68330"
+#     movem_store_decremented = True
+#     # AKA CPU32
 
     # add BGND, CHK2, CMP2, DIVSL, DIVUL, EXTB, LPSTOP, TBLS, TBLSN, TBLU, TBLUN, TRAPcc
 
 
-class M68340(M68330):
-    name = "M68340"
+# class M68340(M68330):
+#     name = "M68340"
 
 
 def create_vector_table(view, addr, size=256):

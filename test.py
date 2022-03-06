@@ -6,6 +6,10 @@ test_cases = [
     (b'\x53\x00', 'LLIL_SET_REG.d(d0,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d0)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))))'),
     # ror.b     #$1,d1
     (b'\xe2\x19', 'LLIL_SET_REG.d(d1,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d1)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_ROR.b{*}(LLIL_REG.b(d1),LLIL_CONST.b(0x1)))))'),
+    # move.b    $0012(a6),d0
+    # (b'\x10\x2e\x00\x12', ''),
+    # btst      #$0,d0
+    # (b'\x08\x00\x00\x00', ''),
 ]
 
 import re
@@ -76,6 +80,7 @@ def il_str_to_tree(ilstr):
     return result
 
 def test_all():
+    ret = True
     for (test_i, (data, expected)) in enumerate(test_cases):
         actual = instr_to_il(data)
         if actual != expected:
@@ -86,5 +91,5 @@ def test_all():
             print(actual)
             print('\t    tree:')
             print(il_str_to_tree(actual))
-            return False
-    return True
+            ret = False
+    return ret

@@ -515,7 +515,7 @@ class M68000(Architecture):
         elif instr == 'cas':
             skip_label_found = True
 
-            skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+            skip = il.get_label_for_address(il.arch, il.current_address+length)
 
             if skip is None:
                 skip = LowLevelILLabel()
@@ -561,7 +561,7 @@ class M68000(Architecture):
         elif instr == 'cas2':
             skip_label_found = True
 
-            skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+            skip = il.get_label_for_address(il.arch, il.current_address+length)
 
             if skip is None:
                 skip = LowLevelILLabel()
@@ -624,7 +624,7 @@ class M68000(Architecture):
         elif instr == 'chk':
             skip_label_found = True
 
-            skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+            skip = il.get_label_for_address(il.arch, il.current_address+length)
 
             if skip is None:
                 skip = LowLevelILLabel()
@@ -672,7 +672,7 @@ class M68000(Architecture):
         elif instr == 'chk2':
             skip_label_found = True
 
-            skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+            skip = il.get_label_for_address(il.arch, il.current_address+length)
 
             if skip is None:
                 skip = LowLevelILLabel()
@@ -960,7 +960,7 @@ class M68000(Architecture):
 
             skip_label_found = True
 
-            skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+            skip = il.get_label_for_address(il.arch, il.current_address+length)
 
             if skip is None:
                 skip = LowLevelILLabel()
@@ -1264,8 +1264,13 @@ class M68000(Architecture):
 
             dstlabel = None
             try:
-                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST_PTR:
+                    # OpRegisterIndirectDisplacement
                     dstlabel = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
+                elif (tmpil[dest_il].operation == LowLevelILOperation.LLIL_SX and
+                      tmpil[dest_il].operands[0].operation == LowLevelILOperation.LLIL_CONST):
+                    # OpAbsolute
+                    dstlabel = il.get_label_for_address(il.arch, tmpil[dest_il].operands[0].constant)
             except:
                 raise
 
@@ -1304,7 +1309,7 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 t = None
-                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST_PTR:
                     t = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
 
                 indirect = False
@@ -1353,8 +1358,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 branch = None
-                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                    branch = il.get_label_for_address(Architecture['M68000'], tmpil[dest_il].constant)
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST_PTR:
+                    branch = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
 
                 indirect = False
 
@@ -1364,7 +1369,7 @@ class M68000(Architecture):
 
                 skip_label_found = True
 
-                skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+                skip = il.get_label_for_address(il.arch, il.current_address+length)
 
                 if skip is None:
                     skip = LowLevelILLabel()
@@ -1426,7 +1431,7 @@ class M68000(Architecture):
             else:
                 skip_label_found = True
 
-                skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+                skip = il.get_label_for_address(il.arch, il.current_address+length)
 
                 if skip is None:
                     skip = LowLevelILLabel()
@@ -1537,7 +1542,7 @@ class M68000(Architecture):
             else:
                 skip_label_found = True
 
-                skip = il.get_label_for_address(Architecture['M68000'], il.current_address+length)
+                skip = il.get_label_for_address(il.arch, il.current_address+length)
 
                 if skip is None:
                     skip = LowLevelILLabel()

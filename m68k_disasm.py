@@ -20,7 +20,7 @@ from binaryninja import BinaryViewType
 from .m68k_ops import *
 
 class M68KDisasm:
-    address_size = 3
+    address_size = 4
     control_registers = {
     }
 

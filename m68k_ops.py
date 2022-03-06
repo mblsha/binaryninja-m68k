@@ -157,7 +157,7 @@ SIZE_LONG = 2
 SizeSuffix = [
     '.b', # SIZE_BYTE
     '.w', # SIZE_WORD
-    '.l', # SIZE_LONG
+    '', # SIZE_LONG
 ]
 
 # Operands
@@ -224,15 +224,14 @@ class OpRegisterDirect(Operand):
             return il.unimplemented()
 
         # return il.set_reg(1 << self.size, self.reg, value)
-        # if self.size == SIZE_BYTE:
-        #     if self.reg[0] == 'a' or self.reg == 'sp':
-        #         return None
-        #     else:
-        #         return il.set_reg(1, self.reg+'.b', value, flags)
-        # elif self.size == SIZE_WORD:
-        #     return il.set_reg(2, self.reg+'.w', value, flags)
-        # else:
-        #     return il.set_reg(4, self.reg, value, flags)
+        if self.size == SIZE_BYTE:
+            if self.reg[0] == 'a' or self.reg == 'sp':
+                return il.unimplemented()
+        if self.size == SIZE_LONG:
+            if not value:
+                return il.unimplemented()
+        return il.set_reg(1 << self.size, self.reg + SizeSuffix[self.size], value, flags)
+        """
         if self.size == SIZE_BYTE:
             if self.reg[0] == 'a' or self.reg == 'sp':
                 return il.unimplemented()
@@ -248,6 +247,7 @@ class OpRegisterDirect(Operand):
                 return il.set_reg(4, self.reg, value, flags)
             else:
                 return il.unimplemented()
+        """
 
 
 class OpRegisterDirectPair(Operand):

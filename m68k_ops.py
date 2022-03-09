@@ -136,6 +136,12 @@ SizeSuffix = [
     '', # SIZE_LONG
 ]
 
+
+def dump(obj):
+    for attr in dir(obj):
+        print("obj.%s = %r" % (attr, getattr(obj, attr)))
+
+
 # Operands
 class OpRegisterDirect:
     def __init__(self, size, reg):
@@ -179,31 +185,13 @@ class OpRegisterDirect:
         if self.reg == 'ccr':
             return il.unimplemented()
 
-        # return il.set_reg(1 << self.size, self.reg, value)
         if self.size == SIZE_BYTE:
             if self.reg[0] == 'a' or self.reg == 'sp':
                 return il.unimplemented()
         if self.size == SIZE_LONG:
-            if not value:
+            if value is None:
                 return il.unimplemented()
         return il.set_reg(1 << self.size, self.reg + SizeSuffix[self.size], value, flags)
-        """
-        if self.size == SIZE_BYTE:
-            if self.reg[0] == 'a' or self.reg == 'sp':
-                return il.unimplemented()
-            else:
-                return il.set_reg(4, self.reg, il.or_expr(4, il.and_expr(4, il.const(4, 0xffffff00), il.reg(4, self.reg)), il.and_expr(4, il.const(4, 0xff), value)), flags)
-        elif self.size == SIZE_WORD:
-            if self.reg[0] == 'a' or self.reg == 'sp':
-                return il.set_reg(4, self.reg, il.sign_extend(4, value), flags)
-            else:
-                return il.set_reg(4, self.reg, il.or_expr(4, il.and_expr(4, il.const(4, 0xffff0000), il.reg(4, self.reg)), il.and_expr(4, il.const(4, 0xffff), value)), flags)
-        else:
-            if value:
-                return il.set_reg(4, self.reg, value, flags)
-            else:
-                return il.unimplemented()
-        """
 
 
 class OpRegisterDirectPair:

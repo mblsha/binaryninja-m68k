@@ -134,10 +134,12 @@ class M68000(Architecture):
 
     stack_pointer = 'sp'
     flags = ['x', 'n', 'z', 'v', 'c']
-    flag_write_types = ['*', 'nzvc']
+    flag_write_types = ['*', 'nzvc', 'nz']
     flags_written_by_flag_write_type = {
         '*': ['x', 'n', 'z', 'v', 'c'],
         'nzvc': ['n', 'z', 'v', 'c'],
+        # mblsha:
+        'nz': ['n', 'z'],
     }
     flag_roles = {
         'x': FlagRole.SpecialFlagRole,
@@ -290,14 +292,77 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'neg':
+            # LLIL_TEMP(0) = src
+            # LLIL_TEMP(1) = res
             il.append(
-                dest.get_dest_il(il,
+                il.set_reg(size_bytes, LLIL_TEMP(0),
+                    dest.get_source_il(il),
+                )
+            )
+            il.append(
+                il.set_reg(size_bytes, LLIL_TEMP(1),
                     il.neg_expr(size_bytes,
                         dest.get_source_il(il),
-                        flags='*'
+                        flags='nz'
                     )
                 )
             )
+            il.append(dest.get_dest_il(il, il.reg(size_bytes, LLIL_TEMP(1))))
+            # c: cleared if zero, set if non-zero
+            a = il.and_expr(size_bytes,
+                il.reg(size_bytes, LLIL_TEMP(0)),
+                il.reg(size_bytes, LLIL_TEMP(1))
+            )
+            if size_bytes == 1:
+                # CFLAG_8
+                il.append(il.set_flag('c', il.reg(size_bytes, LLIL_TEMP(1))))
+            elif size_bytes == 2:
+                # CFLAG_16
+                il.append(
+                    il.set_flag('c',
+                        il.logical_shift_right(size_bytes,
+                            il.reg(size_bytes, LLIL_TEMP(1)),
+                            8
+                        )
+                    )
+                )
+            elif size_bytes == 4:
+                # CFLAG_SUB_32, D is 0
+                #  (((src & res) | (src | res))>>23)
+                #     A             B
+                #                C
+                b = il.or_expr(size_bytes,
+                    il.reg(size_bytes, LLIL_TEMP(0)),
+                    il.reg(size_bytes, LLIL_TEMP(1))
+                )
+                c = il.or_expr(size_bytes, a, b)
+                il.append(
+                    il.set_flag('c',
+                        il.logical_shift_right(size_bytes,
+                            c,
+                            23
+                        )
+                    )
+                )
+            # same as c
+            il.append(il.set_flag('x', il.flag('c')))
+            # v: (src & res) >> shift
+            il.append(
+                il.set_flag('v',
+                    il.logical_shift_right(size_bytes,
+                        a,
+                        (size_bytes - 1) * 8
+                    )
+                )
+            )
+            # il.append(
+            #     dest.get_dest_il(il,
+            #         il.neg_expr(size_bytes,
+            #             dest.get_source_il(il),
+            #             flags='*'
+            #         )
+            #     )
+            # )
         elif instr == 'negx':
             il.append(
                 dest.get_dest_il(il,
@@ -1710,8 +1775,8 @@ class M68000(Architecture):
     def get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il):
         # special
         if flag == 'x':
-            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD) or (op == LowLevelILOperation.LLIL_NEG):
-                # subq, add, neg: x is carry
+            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD):
+                # subq, add: x is carry
                 return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
             # if (op == LowLevelILOperation.LLIL_ASR) or (op == LowLevelILOperation.LLIL_LSR):
             #     # asr, lsr: if shift is 0, x is unaffected, otherwise x is carry
@@ -1742,7 +1807,7 @@ class M68000(Architecture):
 
         if not self._flags:
             self._flags = {}
-        request = {'op': str(LowLevelILOperation(op)), 'size': size, 'write_type': write_type, 'flag': flag}
+        request = {'op': str(LowLevelILOperation(op)), 'write_type': write_type, 'flag': flag}
         srequest = str(request)
         if not srequest in self._flags:
             self._flags[srequest] = 0

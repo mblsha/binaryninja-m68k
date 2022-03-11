@@ -1715,7 +1715,9 @@ class M68000(Architecture):
                 return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
             # if (op == LowLevelILOperation.LLIL_ASR) or (op == LowLevelILOperation.LLIL_LSR):
             #     # asr, lsr: if shift is 0, x is unaffected, otherwise x is carry
+            #     # FIXME: shift size isn't always a constant
             #     if operands[1] != 0:
+            #         FIXME: carry needs to be lifted as well
             #         return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
             #     return il.flag('x')
 
@@ -1724,11 +1726,17 @@ class M68000(Architecture):
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: c is cleared
                 return il.const(1, 0)
+            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR):
+                # andi, ori: c is cleared
+                return il.const(1, 0)
 
         # overflow
         if flag == 'v':
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: v is cleared
+                return il.const(1, 0)
+            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR):
+                # andi, ori: v is cleared
                 return il.const(1, 0)
 
 

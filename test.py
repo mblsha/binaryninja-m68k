@@ -2,15 +2,12 @@
 from .m68k import *
 
 test_cases = [
-    # subq.b    #$1,d0b
-    # (b'\x53\x00', 'LLIL_SET_REG.d(d0,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d0)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))))'),
-    # ror.b     #$1,d1
-    # (b'\xe2\x19', 'LLIL_SET_REG.d(d1,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d1)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_ROR.b{*}(LLIL_REG.b(d1),LLIL_CONST.b(0x1)))))'),
     # Unimplemented instructions
     # moveq     #$0000,d0
     (b'\x70\x00', 'LLIL_SET_REG.d{nzvc}(d0,LLIL_CONST.d(0x0))'),
     # subq.b    #$1,d0
-    (b'\x53\x00', ''),
+    # FIXME: Generate flag 'x'
+    (b'\x53\x00', 'LLIL_SET_REG.b(d0.b,LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))'),
 ]
 
 import re

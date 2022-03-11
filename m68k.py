@@ -1726,8 +1726,8 @@ class M68000(Architecture):
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: c is cleared
                 return il.const(1, 0)
-            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR):
-                # andi, ori: c is cleared
+            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR) or (op == LowLevelILOperation.LLIL_XOR):
+                # andi, ori, eori: c is cleared
                 return il.const(1, 0)
 
         # overflow
@@ -1735,8 +1735,8 @@ class M68000(Architecture):
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: v is cleared
                 return il.const(1, 0)
-            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR):
-                # andi, ori: v is cleared
+            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR) or (op == LowLevelILOperation.LLIL_XOR):
+                # andi, ori, eori: v is cleared
                 return il.const(1, 0)
 
 

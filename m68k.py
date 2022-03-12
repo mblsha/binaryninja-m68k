@@ -41,6 +41,36 @@ from binaryninja.enums import (Endianness, BranchType, InstructionTextTokenType,
         ImplicitRegisterExtend, SymbolType)
 from binaryninja import BinaryViewType
 
+def cflag_8(il, size_bytes, a):
+    return a
+
+def cflag_16(il, size_bytes, a):
+    return il.logical_shift_right(size_bytes, a, 8)
+
+def cflag_sub_32(il, size_bytes, s, d, r):
+    #  (((S & R) | (~D & (S | R)))>>23);
+    #     A         B     C
+    # 	               D
+    # 		     E
+    a = il.and_expr(size_bytes, s, r)
+    b = il.not_expr(size_bytes, d)
+    c = il.or_expr(size_bytes, s, r)
+    d = il.and_expr(size_bytes, b, c)
+    e = il.or_expr(size_bytes, a, d)
+    return il.logical_shift_right(size_bytes, e, 23)
+
+def nflag_8(il, size_bytes, a):
+    return a
+
+def nflag_16(il, size_bytes, a):
+    return il.logical_shift_right(size_bytes, a, 8)
+
+def nflag_32(il, size_bytes, a):
+    return il.logical_shift_right(size_bytes, a, 24)
+
+def nflag_64(il, size_bytes, a):
+    return il.logical_shift_right(size_bytes, a, 56)
+
 from .m68k_ops import *
 from .m68k_disasm import *
 class M68000(Architecture):
@@ -292,13 +322,13 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'neg':
-            # LLIL_TEMP(0) = src
-            # LLIL_TEMP(1) = res
             il.append(
                 il.set_reg(size_bytes, LLIL_TEMP(0),
                     dest.get_source_il(il),
                 )
             )
+            ilsrc = il.reg(size_bytes, LLIL_TEMP(0))
+
             il.append(
                 il.set_reg(size_bytes, LLIL_TEMP(1),
                     il.neg_expr(size_bytes,
@@ -307,75 +337,73 @@ class M68000(Architecture):
                     )
                 )
             )
-            il.append(dest.get_dest_il(il, il.reg(size_bytes, LLIL_TEMP(1))))
+            ilres = il.reg(size_bytes, LLIL_TEMP(1))
+
+            il.append(dest.get_dest_il(il, ilres))
             # c: cleared if zero, set if non-zero
-            a = il.and_expr(size_bytes,
-                il.reg(size_bytes, LLIL_TEMP(0)),
-                il.reg(size_bytes, LLIL_TEMP(1))
-            )
             if size_bytes == 1:
-                # CFLAG_8
-                il.append(il.set_flag('c', il.reg(size_bytes, LLIL_TEMP(1))))
+                il.append(il.set_flag('c', cflag_8(il, size_bytes, ilres)))
             elif size_bytes == 2:
-                # CFLAG_16
-                il.append(
-                    il.set_flag('c',
-                        il.logical_shift_right(size_bytes,
-                            il.reg(size_bytes, LLIL_TEMP(1)),
-                            8
-                        )
-                    )
-                )
+                il.append(il.set_flag('c', cflag_16(il, size_bytes, ilres)))
             elif size_bytes == 4:
-                # CFLAG_SUB_32, D is 0
-                #  (((src & res) | (src | res))>>23)
-                #     A             B
-                #                C
-                b = il.or_expr(size_bytes,
-                    il.reg(size_bytes, LLIL_TEMP(0)),
-                    il.reg(size_bytes, LLIL_TEMP(1))
-                )
-                c = il.or_expr(size_bytes, a, b)
-                il.append(
-                    il.set_flag('c',
-                        il.logical_shift_right(size_bytes,
-                            c,
-                            23
-                        )
-                    )
-                )
-            # same as c
+                il.append(il.set_flag('c', cflag_sub_32(il, size_bytes, ilsrc, il.const(size_bytes, 0), ilres)))
+            # x: same as c
             il.append(il.set_flag('x', il.flag('c')))
             # v: (src & res) >> shift
             il.append(
                 il.set_flag('v',
                     il.logical_shift_right(size_bytes,
-                        a,
+                        il.and_expr(size_bytes, ilsrc, ilres),
                         (size_bytes - 1) * 8
                     )
                 )
             )
-            # il.append(
-            #     dest.get_dest_il(il,
-            #         il.neg_expr(size_bytes,
-            #             dest.get_source_il(il),
-            #             flags='*'
-            #         )
-            #     )
-            # )
         elif instr == 'negx':
             il.append(
-                dest.get_dest_il(il,
+                il.set_reg(size_bytes, LLIL_TEMP(0),
+                    dest.get_source_il(il),
+                )
+            )
+            ilsrc = il.reg(size_bytes, LLIL_TEMP(0))
+
+            il.append(
+                il.set_reg(size_bytes, LLIL_TEMP(1),
                     il.sub(size_bytes,
                         il.neg_expr(size_bytes,
-                            dest.get_source_il(il),
-                            flags='*'
+                            dest.get_source_il(il)
                         ),
-                        il.flag('x'),
-                        flags='*'
+                        il.flag('x')
                     )
                 )
             )
+            ilres = il.reg(size_bytes, LLIL_TEMP(1))
+
+            il.append(dest.get_dest_il(il, ilres))
+            # n: set if result is negative, cleared otherwise
+            # c: set if borrow occurs
+            if size_bytes == 1:
+                il.append(il.set_flag('c', cflag_8(il, size_bytes, ilres)))
+                il.append(il.set_flag('n', nflag_8(il, size_bytes, ilres)))
+            elif size_bytes == 2:
+                il.append(il.set_flag('c', cflag_16(il, size_bytes, ilres)))
+                il.append(il.set_flag('n', nflag_16(il, size_bytes, ilres)))
+            elif size_bytes == 4:
+                il.append(il.set_flag('c', cflag_sub_32(il, size_bytes, ilsrc, il.const(size_bytes, 0), ilres)))
+                il.append(il.set_flag('n', nflag_32(il, size_bytes, ilres)))
+            # x: same as c
+            il.append(il.set_flag('x', il.flag('c')))
+            # v: set if an overflow occurs
+            # v: (src & res) >> shift
+            il.append(
+                il.set_flag('v',
+                    il.logical_shift_right(size_bytes,
+                        il.and_expr(size_bytes, ilsrc, ilres),
+                        (size_bytes - 1) * 8
+                    )
+                )
+            )
+            # z: cleared if the result is nonzero, unchanged otherwise
+            il.append(il.set_flag('z', il.or_expr(size_bytes, ilres, il.flag('z'))))
         elif instr == 'abcd':
             # TODO
             il.append(il.unimplemented())

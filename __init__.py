@@ -1,3 +1,5 @@
+from binaryninja import Architecture, CallingConvention
+
 from .m68k import *
 from .test import test_all
 
@@ -14,6 +16,14 @@ M68000.register()
 # M68EC040.register()
 # M68330.register()
 # M68340.register()
+
+
+class ParametersInRegistersCallingConvention(CallingConvention):
+    name = "ParametersInRegisters"
+
+
+arch = Architecture['M68000']
+arch.register_calling_convention(ParametersInRegistersCallingConvention(arch, 'default'))
 
 # BinaryViewType['ELF'].register_arch(4, Endianness.BigEndian, Architecture['M68030'])
 

@@ -8,6 +8,12 @@ test_cases = [
     # subq.b    #$1,d0
     # FIXME: Generate flag 'x'
     (b'\x53\x00', 'LLIL_SET_REG.b(d0.b,LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))'),
+
+    # jsr 0x5dc1c, no arguments for this call
+    (b'\x4e\xb9\x00\x05\xdc\x1c', 'LLIL_CALL(LLIL_SX.d(LLIL_CONST.d(0x5DC1C)))'),
+
+    # at 0x53a, jsr 0x546, seems to be correctly interpreted as a call
+    (b'\x4e\xba\x00\x0a', 'LLIL_CALL(LLIL_CONST_PTR.d(0xC))'),
 ]
 
 import re
@@ -25,10 +31,11 @@ def il2str(il):
 
         # print size-specified IL constants in hex
         if il.operation in [LowLevelILOperation.LLIL_CONST, LowLevelILOperation.LLIL_CONST_PTR] and il.size:
+            const_ptr_suffix = '_PTR' if il.operation in [LowLevelILOperation.LLIL_CONST_PTR] else ''
             tmp = il.operands[0]
             if tmp < 0: tmp = (1<<(il.size*8))+tmp
             tmp = '0x%X' % tmp if il.size else '%d' % il.size
-            return 'LLIL_CONST%s(%s)' % (size_code, tmp)
+            return 'LLIL_CONST%s%s(%s)' % (const_ptr_suffix, size_code, tmp)
         else:
             return '%s%s%s(%s)' % (il.operation.name, size_code, flags_code, ','.join([il2str(o) for o in il.operands]))
     elif isinstance(il, list):

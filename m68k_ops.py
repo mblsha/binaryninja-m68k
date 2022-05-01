@@ -849,9 +849,14 @@ class OpAbsolute:
         # return il.sign_extend(self.address_width,
         #     il.const(1 << self.address_size, self.address)
         # )
-        a = il.const(1 << self.address_size, self.address)
-        b = il.sign_extend(self.address_width, a)
-        return (b, [a, b])
+        a = il.const_pointer(1 << self.address_size, self.address)
+        return (a, [a])
+        # FIXME: binja 3.0.3355-dev won't show function arguments if we
+        # use il.sign_extend.
+        # if (1 << self.address_size) == self.address_width:
+        #     return (a, [a])
+        # b = il.sign_extend(self.address_width, a)
+        # return (b, [a, b])
 
     def get_address_il(self, il):
         return self.get_address_il2(il)[0]

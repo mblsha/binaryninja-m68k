@@ -133,10 +133,11 @@ class M68000(Architecture):
     }
     stack_pointer = 'sp'
     flags = ['x', 'n', 'z', 'v', 'c']
-    flag_write_types = ['*', 'nzvc']
+    flag_write_types = ['*', 'nzvc', 'nz']
     flags_written_by_flag_write_type = {
         '*': ['x', 'n', 'z', 'v', 'c'],
         'nzvc': ['n', 'z', 'v', 'c'],
+        'nz': ['n', 'z'],
     }
     flag_roles = {
         'x': FlagRole.SpecialFlagRole,
@@ -1026,10 +1027,13 @@ class M68000(Architecture):
             il.append(
                 il.sub(size_bytes,
                     dest.get_source_il(il),
-                    il.const(4, 0),
-                    flags='nzvc'
+                    il.const(size_bytes, 0),
+                    flags='nz'
                 )
             )
+            # vc: always cleared
+            il.append(il.set_flag('v', il.const(1, 0x0)))
+            il.append(il.set_flag('c', il.const(1, 0x0)))
         elif instr in ('and', 'andi'):
             if instr == 'andi' and isinstance(dest, OpRegisterDirect) and dest.reg in ('ccr', 'sr'):
                 if not source.value & 0x01: il.append(il.set_flag('c', il.const(1, 0)))

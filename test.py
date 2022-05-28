@@ -20,6 +20,10 @@ test_cases = [
 
     # tst.w     d1
     (b'\x4a\x41', 'LLIL_SUB.w{nz}(LLIL_REG.w(d1),LLIL_CONST.w(0x0)); LLIL_SET_FLAG(v,LLIL_CONST.b(0x0)); LLIL_SET_FLAG(c,LLIL_CONST.b(0x0))'),
+
+    # lea       ($279d2e),a0
+    # move      $-004(a0),$0074(a6)
+    (b'\x41\xf9\x00\x27\x9d\x2e\x2d\x68\xff\xfc\x00\x74', 'LLIL_SET_REG.d(a0,LLIL_CONST_PTR.d(0x279D2E)); LLIL_STORE.d{nzvc}(LLIL_ADD.d(LLIL_REG.d(a6),LLIL_CONST.w(0x74)),LLIL_LOAD.d(LLIL_SUB.d(LLIL_REG.d(a0),LLIL_CONST.w(0x4))))'),
 ]
 
 import re

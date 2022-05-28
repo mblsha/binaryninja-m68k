@@ -490,8 +490,8 @@ class OpRegisterIndirectDisplacement:
             return (r, [r])
         else:
             a = il.reg(4, self.reg)
-            b = il.const(2, self.offset)
-            c = il.add(4, a, b)
+            b = il.const(2, self.offset) if self.offset >= 0 else il.const(2, -self.offset)
+            c = il.add(4, a, b) if self.offset >= 0 else il.sub(4, a, b)
             return (c, [a, b, c])
 
     def get_address_il(self, il):

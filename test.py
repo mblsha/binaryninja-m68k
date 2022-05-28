@@ -14,6 +14,12 @@ test_cases = [
 
     # at 0x53a, jsr 0x546, seems to be correctly interpreted as a call
     (b'\x4e\xba\x00\x0a', 'LLIL_CALL(LLIL_CONST_PTR.d(0xC))'),
+
+    # lea (data_7a9ee[2]),a1
+    (b'\x43\xf9\x00\x07\xa9\xf0', 'LLIL_SET_REG.d(a1,LLIL_CONST_PTR.d(0x7A9F0))'),
+
+    # tst.w     d1
+    (b'\x4a\x41', 'LLIL_SUB.w{nz}(LLIL_REG.w(d1),LLIL_CONST.w(0x0)); LLIL_SET_FLAG(v,LLIL_CONST.b(0x0)); LLIL_SET_FLAG(c,LLIL_CONST.b(0x0))'),
 ]
 
 import re

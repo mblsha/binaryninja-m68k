@@ -1123,10 +1123,13 @@ class M68000(Architecture):
             il.append(
                 il.sub(size_bytes,
                     dest.get_source_il(il),
-                    il.const(4, 0),
-                    flags='nzvc'
+                    il.const(size_bytes, 0),
+                    flags='nz'
                 )
             )
+            # vc: always cleared
+            il.append(il.set_flag('v', il.const(1, 0x0)))
+            il.append(il.set_flag('c', il.const(1, 0x0)))
         elif instr in ('and', 'andi'):
             if instr == 'andi' and isinstance(dest, OpRegisterDirect) and dest.reg in ('ccr', 'sr'):
                 if not source.value & 0x01: il.append(il.set_flag('c', il.const(1, 0)))

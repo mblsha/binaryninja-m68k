@@ -375,7 +375,7 @@ class OpRegisterIndirect(Operand):
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectPair(Operand):
@@ -453,7 +453,7 @@ class OpRegisterIndirectPostincrement(Operand):
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectPredecrement(Operand):
@@ -493,7 +493,7 @@ class OpRegisterIndirectPredecrement(Operand):
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectDisplacement(Operand):
@@ -544,7 +544,7 @@ class OpRegisterIndirectDisplacement(Operand):
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpRegisterIndirectIndex(Operand):
@@ -602,7 +602,7 @@ class OpRegisterIndirectIndex(Operand):
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirect(Operand):
@@ -656,7 +656,7 @@ class OpMemoryIndirect(Operand):
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirectPostindex(Operand):
@@ -726,7 +726,7 @@ class OpMemoryIndirectPostindex(Operand):
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpMemoryIndirectPreindex(Operand):
@@ -796,7 +796,7 @@ class OpMemoryIndirectPreindex(Operand):
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+            return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpAbsolute(Operand):
@@ -833,7 +833,7 @@ class OpAbsolute(Operand):
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
-        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il).index, value.index, size=1 << self.size, flags=flags)
+        return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
 class OpImmediate(Operand):
@@ -1802,7 +1802,7 @@ class M68000(Architecture):
         #print((instr, length, size, source, dest, third))
         return instr, length, size, source, dest, third
 
-    def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: int, dest: int, third: int):
+    def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: Optional[Operand], dest: Optional[Operand], third: Optional[Operand]):
         size_bytes = None
         if size is not None:
             size_bytes = 1 << size

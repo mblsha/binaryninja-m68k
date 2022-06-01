@@ -56,7 +56,7 @@ from binaryninja.enums import (Endianness, BranchType, InstructionTextTokenType,
         ImplicitRegisterExtend, SymbolType)
 from binaryninja import BinaryViewType, lowlevelil
 
-log_info(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
+log_debug(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
 
 # Shift syles
 SHIFT_SYLE_ARITHMETIC = 0,
@@ -2884,11 +2884,12 @@ class M68000(Architecture):
                 source.get_dest_il(il, il.pop(4))
             )
         elif instr in ('jmp', 'bra'):
-            dstil = dest.get_address_il(il)
+            dest_il = dest.get_address_il(il)
 
             dstlabel = None
-            if il[dstil].operation == LowLevelILOperation.LLIL_CONST:
-                dstlabel = il.get_label_for_address(il.arch, il[dstil].constant)
+            # TODO: this looks like it can't ever happen, so remove?
+            if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                dstlabel = il.get_label_for_address(il.arch, il[dest_il].constant)
 
             if dstlabel is not None:
                 il.append(
@@ -2896,7 +2897,7 @@ class M68000(Architecture):
                 )
             else:
                 il.append(
-                    il.jump(dstil)
+                    il.jump(dest_il)
                 )
         elif instr in ('jsr', 'bsr'):
             il.append(
@@ -2921,7 +2922,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 t = None
-                if il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                # TODO: this looks like it can't ever happen, so remove?
+                if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
                     t = il.get_label_for_address(il.arch, il[dest_il].constant)
 
                 indirect = False
@@ -2966,7 +2968,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 branch = None
-                if il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                # TODO: this looks like it can't ever happen, so remove?
+                if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
                     branch = il.get_label_for_address(Architecture['M68000'], il[dest_il].constant)
 
                 indirect = False
@@ -3335,7 +3338,7 @@ class M68000(Architecture):
         return False
 
     def is_skip_and_return_zero_patch_available(self, data: bytes, addr: int = 0) -> bool:
-        return self.skip_and_return_value(data, addr)
+        return self.skip_and_return_value(data, addr, 0)
 
     def is_skip_and_return_value_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)
@@ -3576,7 +3579,8 @@ def create_vector_table(view, addr, size=256):
 
         if k > 0:
             view.define_user_symbol(Symbol(SymbolType.FunctionSymbol, value, "vector_%d_%s" % (k, name)))
-            view.add_entry_point(value)
+            if value > 0:
+                view.add_entry_point(value)
 
 
 def prompt_create_vector_table(view, addr=None):

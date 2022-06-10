@@ -1,12 +1,15 @@
-# Motorola 68k Architecture Plugin (v0.1)
+# Motorola 68k Architecture Plugin (v0.2)
 Original Author: [**Alex Forencich**](http://www.github.com/alexforencich)
+Previous Maintainer: [**Jason Wright**](http://www.github.com/wrigjl)
 
-_A disassembler and lifter for the Motorola 68k architecture._
+_A Binary Ninja disassembler and lifter for the Motorola 68k architecture._
 
 ## Moved
 
 Development of this plugin has moved to
 [galenbwill/binaryninja-m68k](https://github.com/galenbwill/binaryninja-m68k/)
+
+**Note:** This project is currently being maintained by [@galenbwill](https://github.com/galenbwill) as a community plugin, not as an official Vector 35 plugin.
 
 ## Description:
 
@@ -20,11 +23,17 @@ To install this plugin, navigate to your Binary Ninja plugins directory, and run
 
 This plugin requires the following minimum version of Binary Ninja:
 
- * release (Personal) - 1.1
+ * release (Personal) - 3.0
 
 ## License
 
 This plugin is released under a [MIT](LICENSE) license.
+
+## Modifications by [Galen Williamson](https://www.github.com/galenbwill)
+
+* fixed and updated for Binary Ninja API 3.0
+* added type hints
+* fixed vector table creation to no longer create an entry point at offset 0 for zero-valued vectors
 
 ## Modifications by [Jason Wright](http://www.github.com/wrigjl)
 

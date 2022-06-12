@@ -177,6 +177,8 @@ class OpRegisterDirect:
             z = il.flag_bit(1, 'z', 2)
             n = il.flag_bit(1, 'n', 3)
             x = il.flag_bit(1, 'x', 4)
+            print(self)
+            # FIXME: return array
             return il.or_expr(1, il.or_expr(1, il.or_expr(1, il.or_expr(1, c, v), z), n), x)
         else:
             return il.reg(1 << self.size, self.reg)
@@ -228,6 +230,7 @@ class OpRegisterDirectPair:
         return (il.reg(1 << self.size, self.reg1), il.reg(1 << self.size, self.reg2))
 
     def get_dest_il(self, il, values, flags=0):
+        # FIXME: are we correctly putting them into lists?
         return (il.set_reg(1 << self.size, self.reg1, values[0], flags), il.set_reg(1 << self.size, self.reg2, values[1], flags))
 
 
@@ -278,9 +281,11 @@ class OpRegisterMovemList:
         return self.get_address_il2(il)[0]
 
     def get_source_il(self, il):
+        # FIXME: are we correctly putting them into lists?
         return [il.reg(1 << self.size, reg) for reg in self.regs]
 
     def get_dest_il(self, il, values, flags=0):
+        # FIXME: are we correctly putting them into lists?
         return [il.set_reg(1 << self.size, reg, val, flags) for reg, val in zip(self.regs, values)]
 
 
@@ -317,6 +322,7 @@ class OpRegisterIndirect:
         return il.load(1 << self.size, self.get_address_il(il))
 
     def get_dest_il(self, il, value, flags=0):
+        # FIXME: why???
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
@@ -358,9 +364,11 @@ class OpRegisterIndirectPair:
         return self.get_address_il2(il)[0]
 
     def get_source_il(self, il):
+        # FIXME: are we correctly putting them into lists?
         return (il.load(1 << self.size, il.reg(4, self.reg1)), il.load(1 << self.size, il.reg(4, self.reg2)))
 
     def get_dest_il(self, il, values, flags=0):
+        # FIXME: are we correctly putting them into lists?
         #return (il.store(1 << self.size, il.reg(4, self.reg1), values[0], flags), il.store(1 << self.size, il.reg(4, self.reg2), values[1], flags))
         return (il.store(1 << self.size, il.reg(4, self.reg1), values[0]), il.store(1 << self.size, il.reg(4, self.reg2), values[1]))
 
@@ -386,6 +394,7 @@ class OpRegisterIndirectPostincrement:
         return None
 
     def get_post_il(self, il):
+        # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
             il.add(4,
@@ -427,6 +436,7 @@ class OpRegisterIndirectPredecrement:
         ]
 
     def get_pre_il(self, il):
+        # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
             il.sub(4,

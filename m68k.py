@@ -24,10 +24,25 @@ THE SOFTWARE.
 
 from __future__ import print_function
 
+import sys
+
+__module__ = sys.modules[__name__]
+
+import binaryninja
+__logger = binaryninja.Logger(0, __module__.__name__)
+
+log = __logger.log
+log_debug = __logger.log_debug
+log_info = __logger.log_info
+log_warn = __logger.log_warn
+log_error = __logger.log_error
+log_alert = __logger.log_alert
+
+from typing import List, Optional, Tuple
+
 import struct
 import traceback
 import os
-import capstone
 
 from binaryninja.architecture import Architecture, RegisterInfo, InstructionInfo, InstructionTextToken
 from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP
@@ -35,11 +50,12 @@ from binaryninja.binaryview import BinaryView
 from binaryninja.plugin import PluginCommand
 from binaryninja.interaction import AddressField, ChoiceField, get_form_input
 from binaryninja.types import Symbol
-from binaryninja.log import log_error
 from binaryninja.enums import (Endianness, BranchType, InstructionTextTokenType,
         LowLevelILOperation, LowLevelILFlagCondition, FlagRole, SegmentFlag,
         ImplicitRegisterExtend, SymbolType)
-from binaryninja import BinaryViewType
+from binaryninja import BinaryViewType, lowlevelil
+
+log_info(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
 
 def cflag_8(il, size_bytes, a):
     return a
@@ -203,7 +219,7 @@ class M68000(Architecture):
         Architecture.__init__(self)
         self.disasm = M68KDisasm()
 
-    def generate_instruction_il(self, il, instr, length, size, source, dest, third):
+    def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: Optional[Operand], dest: Optional[Operand], third: Optional[Operand]):
         size_bytes = None
         if size is not None:
             size_bytes = 1 << size
@@ -1675,7 +1691,7 @@ class M68000(Architecture):
         else:
             il.append(il.unimplemented())
 
-    def get_instruction_info(self, data, addr):
+    def get_instruction_info(self, data: bytes, addr: int) -> Optional[InstructionInfo]:
         instr, length, _size, _source, dest, _third = self.disasm.decode_instruction(data, addr)
         if instr == 'unimplemented':
             return None
@@ -1733,12 +1749,7 @@ class M68000(Architecture):
 
         return result
 
-    def get_instruction_text(self, data, addr):
-        # md = capstone.Cs(capstone.CS_ARCH_M68K, capstone.CS_MODE_BIG_ENDIAN)
-        # for i in md.disasm(data, addr):
-        #     # print("0x%x:\t%s\t%s" %(i.address, i.mnemonic, i.op_str))
-        #     break
-
+    def get_instruction_text(self, data: bytes, addr: int) -> Optional[Tuple[List['function.InstructionTextToken'], int]]:
         instr, length, size, source, dest, third = self.disasm.decode_instruction(data, addr)
 
         if size is not None:
@@ -1762,7 +1773,7 @@ class M68000(Architecture):
 
         return tokens, length
 
-    def get_instruction_low_level_il(self, data, addr, il):
+    def get_instruction_low_level_il(self, data: bytes, addr: int, il: lowlevelil.LowLevelILFunction) -> Optional[int]:
         instr, length, size, source, dest, third = self.disasm.decode_instruction(data, addr)
 
         if instr == 'movem':
@@ -1861,7 +1872,7 @@ class M68000(Architecture):
 
         return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
 
-    def perform_is_never_branch_patch_available(self, data, addr):
+    def is_never_branch_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60:
             # BRA, BSR, Bcc
@@ -1871,24 +1882,24 @@ class M68000(Architecture):
             return True
         return False
 
-    def perform_is_invert_branch_patch_available(self, data, addr):
+    def is_invert_branch_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60 and data[0] & 0xfe != 0x60:
             # Bcc
             return True
         return False
 
-    def perform_is_always_branch_patch_available(self, data, addr):
+    def is_always_branch_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60 and data[0] & 0xfe != 0x60:
             # Bcc
             return True
         return False
 
-    def perform_is_skip_and_return_zero_patch_available(self, data, addr):
-        return self.perform_skip_and_return_value(data, addr)
+    def is_skip_and_return_zero_patch_available(self, data: bytes, addr: int = 0) -> bool:
+        return self.skip_and_return_value(data, addr)
 
-    def perform_is_skip_and_return_value_patch_available(self, data, addr):
+    def is_skip_and_return_value_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)
         if data[0] == 0x61:
             # BSR
@@ -1898,37 +1909,37 @@ class M68000(Architecture):
             return True
         return False
 
-    def perform_convert_to_nop(self, data, addr):
+    def convert_to_nop(self, data: bytes, addr: int = 0) -> Optional[bytes]:
         count = int(len(data)/2)
         if count*2 != len(data):
             return None
         return b'\x4e\x71' * count
 
-    def perform_never_branch(self, data, addr):
+    def never_branch(self, data, addr):
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60:
             # BRA, BSR, Bcc
-            return self.perform_convert_to_nop(data, addr)
+            return self.convert_to_nop(data, addr)
         if data[0] == 0x4e and data[1] & 0x80 == 0x80:
             # JMP, JSR
-            return self.perform_convert_to_nop(data, addr)
+            return self.convert_to_nop(data, addr)
         return None
 
-    def perform_invert_branch(self, data, addr):
+    def invert_branch(self, data: bytes, addr: int = 0) -> Optional[bytes]:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60 and data[0] & 0xfe != 0x60:
             # Bcc
             return bytearray([data[0]^1])+data[1:]
         return None
 
-    def perform_always_branch(self, data, addr):
+    def always_branch(self, data: bytes, addr: int = 0) -> Optional[bytes]:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60 and data[0] & 0xfe != 0x60:
             # Bcc
             return b'\x60'+data[1:]
         return None
 
-    def perform_skip_and_return_value(self, data, addr, value=0):
+    def skip_and_return_value(self, data: bytes, addr: int, value: int) -> Optional[bytes]:
         count = int(len(data)/2)
         if count*2 != len(data):
             return None

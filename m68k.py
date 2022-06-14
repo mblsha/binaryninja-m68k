@@ -55,7 +55,7 @@ from binaryninja.enums import (Endianness, BranchType, InstructionTextTokenType,
         ImplicitRegisterExtend, SymbolType)
 from binaryninja import BinaryViewType, lowlevelil
 
-log_info(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
+log_debug(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
 
 def cflag_8(il, size_bytes, a):
     return a
@@ -1897,7 +1897,7 @@ class M68000(Architecture):
         return False
 
     def is_skip_and_return_zero_patch_available(self, data: bytes, addr: int = 0) -> bool:
-        return self.skip_and_return_value(data, addr)
+        return self.skip_and_return_value(data, addr, 0)
 
     def is_skip_and_return_value_patch_available(self, data: bytes, addr: int = 0) -> bool:
         data = bytearray(data)

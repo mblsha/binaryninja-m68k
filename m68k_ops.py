@@ -143,34 +143,57 @@ def dump(obj):
 
 
 # Operands
-class OpRegisterDirect:
-    def __init__(self, size, reg):
+class Operand:
+    def format(self, addr: int) -> List[InstructionTextToken]:
+        raise NotImplementedError
+
+    def get_pre_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        raise NotImplementedError
+
+    def get_post_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        raise NotImplementedError
+
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        raise NotImplementedError
+
+    def get_address_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        raise NotImplementedError
+
+    def get_source_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        raise NotImplementedError
+
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> Optional[ExpressionIndex]:
+        raise NotImplementedError
+
+
+class OpRegisterDirect(Operand):
+    def __init__(self, size: int, reg: str):
         self.size = size
         self.reg = reg
 
     def __repr__(self):
         return "OpRegisterDirect(%d, %s)" % (self.size, self.reg)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # a0, d0
         return [
             InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg)
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.unimplemented()
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         if self.reg == 'ccr':
             c = il.flag_bit(1, 'c', 0)
             v = il.flag_bit(1, 'v', 1)
@@ -183,7 +206,7 @@ class OpRegisterDirect:
         else:
             return il.reg(1 << self.size, self.reg)
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'ccr':
             return il.unimplemented()
 
@@ -196,8 +219,8 @@ class OpRegisterDirect:
         return il.set_reg(1 << self.size, self.reg + SizeSuffix[self.size], value, flags)
 
 
-class OpRegisterDirectPair:
-    def __init__(self, size, reg1, reg2):
+class OpRegisterDirectPair(Operand):
+    def __init__(self, size: int, reg1: str, reg2: str):
         self.size = size
         self.reg1 = reg1
         self.reg2 = reg2
@@ -205,7 +228,7 @@ class OpRegisterDirectPair:
     def __repr__(self):
         return "OpRegisterDirectPair(%d, %s, %s)" % (self.size, self.reg1, self.reg2)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # d0:d1
         return [
             InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg1),
@@ -213,20 +236,20 @@ class OpRegisterDirectPair:
             InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg2)
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.unimplemented()
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return (il.reg(1 << self.size, self.reg1), il.reg(1 << self.size, self.reg2))
 
     def get_dest_il(self, il, values, flags=0):
@@ -234,15 +257,15 @@ class OpRegisterDirectPair:
         return (il.set_reg(1 << self.size, self.reg1, values[0], flags), il.set_reg(1 << self.size, self.reg2, values[1], flags))
 
 
-class OpRegisterMovemList:
-    def __init__(self, size, regs):
+class OpRegisterMovemList(Operand):
+    def __init__(self, size: int, regs: List[str]):
         self.size = size
         self.regs = regs
 
     def __repr__(self):
         return "OpRegisterMovemList(%d, %s)" % (self.size, repr(self.regs))
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # d0-d7/a0/a2/a4-a7
         if len(self.regs) == 0:
             return []
@@ -267,20 +290,20 @@ class OpRegisterMovemList:
             tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, last))
         return tokens
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.unimplemented()
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: are we correctly putting them into lists?
         return [il.reg(1 << self.size, reg) for reg in self.regs]
 
@@ -289,15 +312,15 @@ class OpRegisterMovemList:
         return [il.set_reg(1 << self.size, reg, val, flags) for reg, val in zip(self.regs, values)]
 
 
-class OpRegisterIndirect:
-    def __init__(self, size, reg):
+class OpRegisterIndirect(Operand):
+    def __init__(self, size: int, reg: str):
         self.size = size
         self.reg = reg
 
     def __repr__(self):
         return "OpRegisterIndirect(%d, %s)" % (self.size, self.reg)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # (a0)
         return [
             InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
@@ -305,30 +328,30 @@ class OpRegisterIndirect:
             InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")")
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.reg(4, self.reg)
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         # FIXME: why???
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpRegisterIndirectPair:
-    def __init__(self, size, reg1, reg2):
+class OpRegisterIndirectPair(Operand):
+    def __init__(self, size: int, reg1: str, reg2: str):
         self.size = size
         self.reg1 = reg1
         self.reg2 = reg2
@@ -336,7 +359,7 @@ class OpRegisterIndirectPair:
     def __repr__(self):
         return "OpRegisterIndirectPair(%d, %s, %s)" % (self.size, self.reg1, self.reg2)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # d0:d1
         return [
             InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
@@ -348,22 +371,22 @@ class OpRegisterIndirectPair:
             InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")")
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # return (il.reg(4, self.reg1), il.reg(4, self.reg2))
         a = il.reg(4, self.reg1)
         b = il.reg(4, self.reg2)
         return ((a, b), [a, b])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: are we correctly putting them into lists?
         return (il.load(1 << self.size, il.reg(4, self.reg1)), il.load(1 << self.size, il.reg(4, self.reg2)))
 
@@ -373,15 +396,15 @@ class OpRegisterIndirectPair:
         return (il.store(1 << self.size, il.reg(4, self.reg1), values[0]), il.store(1 << self.size, il.reg(4, self.reg2), values[1]))
 
 
-class OpRegisterIndirectPostincrement:
-    def __init__(self, size, reg):
+class OpRegisterIndirectPostincrement(Operand):
+    def __init__(self, size: int, reg: str):
         self.size = size
         self.reg = reg
 
     def __repr__(self):
         return "OpRegisterIndirectPostincrement(%d, %s)" % (self.size, self.reg)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # (a0)+
         return [
             InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
@@ -390,10 +413,10 @@ class OpRegisterIndirectPostincrement:
             InstructionTextToken(InstructionTextTokenType.TextToken, "+")
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
@@ -403,30 +426,30 @@ class OpRegisterIndirectPostincrement:
             )
         )
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.reg(4, self.reg)
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpRegisterIndirectPredecrement:
-    def __init__(self, size, reg):
+class OpRegisterIndirectPredecrement(Operand):
+    def __init__(self, size: int, reg: str):
         self.size = size
         self.reg = reg
 
     def __repr__(self):
         return "OpRegisterIndirectPredecrement(%d, %s)" % (self.size, self.reg)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # -(a0)
         return [
             InstructionTextToken(InstructionTextTokenType.TextToken, "-"),
@@ -435,7 +458,7 @@ class OpRegisterIndirectPredecrement:
             InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")")
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
@@ -445,26 +468,26 @@ class OpRegisterIndirectPredecrement:
             )
         )
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.reg(4, self.reg)
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpRegisterIndirectDisplacement:
-    def __init__(self, size, reg, offset):
+class OpRegisterIndirectDisplacement(Operand):
+    def __init__(self, size: int, reg: str, offset: int):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -472,7 +495,7 @@ class OpRegisterIndirectDisplacement:
     def __repr__(self):
         return "OpRegisterIndirectDisplacement(%d, %s, 0x%x)" % (self.size, self.reg, self.offset)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         if self.reg == 'pc':
             return [
                 InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
@@ -488,13 +511,13 @@ class OpRegisterIndirectDisplacement:
                 InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")")
             ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         if self.reg == 'pc':
             r = il.const_pointer(4, il.current_address+2+self.offset)
             return (r, [r])
@@ -504,13 +527,13 @@ class OpRegisterIndirectDisplacement:
             c = il.add(4, a, b) if self.offset >= 0 else il.sub(4, a, b)
             return (c, [a, b, c])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'pc':
             return il.unimplemented()
         else:
@@ -518,8 +541,8 @@ class OpRegisterIndirectDisplacement:
             return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpRegisterIndirectIndex:
-    def __init__(self, size, reg, offset, ireg, ireg_long, scale):
+class OpRegisterIndirectIndex(Operand):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: int, scale: int):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -530,7 +553,7 @@ class OpRegisterIndirectIndex:
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, 0x%x, %s, %d, %d)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # $1234(a0,a1.l*4)
         tokens = []
         if self.offset != 0:
@@ -547,13 +570,13 @@ class OpRegisterIndirectIndex:
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"))
         return tokens
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # return il.add(4,
         #     il.add(4,
         #         il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
@@ -575,13 +598,13 @@ class OpRegisterIndirectIndex:
         g = il.add(4, e, f)
         return (g, [a, b, c, d, e, f, g])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'pc':
             return il.unimplemented()
         else:
@@ -589,8 +612,8 @@ class OpRegisterIndirectIndex:
             return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpMemoryIndirect:
-    def __init__(self, size, reg, offset, outer_displacement):
+class OpMemoryIndirect(Operand):
+    def __init__(self, size: int, reg: str, offset: int, outer_displacement: int):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -599,7 +622,7 @@ class OpMemoryIndirect:
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, %d, %d)" % (self.size, self.reg, self.offset, self.outer_displacement)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # ([$1234,a0],$1234)
         tokens = []
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("))
@@ -615,13 +638,13 @@ class OpMemoryIndirect:
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"))
         return tokens
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # return il.add(4,
         #     il.load(4,
         #         il.add(4,
@@ -641,13 +664,13 @@ class OpMemoryIndirect:
         f = il.add(4, d, e)
         return (f, [a, b, c, d, e, f])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'pc':
             return il.unimplemented()
         else:
@@ -655,8 +678,8 @@ class OpMemoryIndirect:
             return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpMemoryIndirectPostindex:
-    def __init__(self, size, reg, offset, ireg, ireg_long, scale, outer_displacement):
+class OpMemoryIndirectPostindex(Operand):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -668,7 +691,7 @@ class OpMemoryIndirectPostindex:
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # ([$1234,a0],a1.l*4,$1234)
         tokens = []
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("))
@@ -691,13 +714,13 @@ class OpMemoryIndirectPostindex:
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"))
         return tokens
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # j = il.add(4, d, i)
         #     d = il.load(4, c)
         #         c = il.add(4, a, b)
@@ -730,13 +753,13 @@ class OpMemoryIndirectPostindex:
         j = il.add(4, d, i)
         return (j, [a, b, c, d, e, f, g, h, i, j])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'pc':
             return il.unimplemented()
         else:
@@ -744,8 +767,8 @@ class OpMemoryIndirectPostindex:
             return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpMemoryIndirectPreindex:
-    def __init__(self, size, reg, offset, ireg, ireg_long, scale, outer_displacement):
+class OpMemoryIndirectPreindex(Operand):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -757,7 +780,7 @@ class OpMemoryIndirectPreindex:
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # ([$1234,a0,a1.l*4],$1234)
         tokens = []
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("))
@@ -780,13 +803,13 @@ class OpMemoryIndirectPreindex:
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"))
         return tokens
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # return il.add(4,
         #     il.load(4,
         #         il.add(4,
@@ -817,13 +840,13 @@ class OpMemoryIndirectPreindex:
         j = il.add(4, h, i)
         return (j, [a, b, c, d, e, f, g, h, i, j])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         if self.reg == 'pc':
             return il.unimplemented()
         else:
@@ -831,7 +854,7 @@ class OpMemoryIndirectPreindex:
             return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpAbsolute:
+class OpAbsolute(Operand):
     def __init__(self, size, address, address_size, address_width):
         self.size = size
         self.address = address
@@ -841,7 +864,7 @@ class OpAbsolute:
     def __repr__(self):
         return "OpAbsolute(%d, 0x%x, %d, %d)" % (self.size, self.address, self.address_size, self.address_width)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # ($1234).w
         return [
             InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
@@ -849,13 +872,13 @@ class OpAbsolute:
             InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"+SizeSuffix[self.address_size])
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         # return il.sign_extend(self.address_width,
         #     il.const(1 << self.address_size, self.address)
         # )
@@ -868,18 +891,18 @@ class OpAbsolute:
         # b = il.sign_extend(self.address_width, a)
         # return (b, [a, b])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
 
 
-class OpImmediate:
+class OpImmediate(Operand):
     def __init__(self, size, value):
         self.size = size
         self.value = value
@@ -887,7 +910,7 @@ class OpImmediate:
     def __repr__(self):
         return "OpImmediate(%d, 0x%x)" % (self.size, self.value)
 
-    def format(self, addr):
+    def format(self, addr: int) -> List[InstructionTextToken]:
         # #$1234
         return [
             InstructionTextToken(InstructionTextTokenType.TextToken, "#"),
@@ -895,23 +918,23 @@ class OpImmediate:
             InstructionTextToken(InstructionTextTokenType.IntegerToken, "${:0{}x}".format(self.value, 1 << self.size), self.value, 1 << self.size)
         ]
 
-    def get_pre_il(self, il):
+    def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_post_il(self, il):
+    def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il2(self, il):
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         r = il.unimplemented()
         return (r, [r])
 
-    def get_address_il(self, il):
+    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self.get_address_il2(il)[0]
 
-    def get_source_il(self, il):
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const(1 << self.size, self.value)
 
-    def get_dest_il(self, il, value, flags=0):
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         return il.unimplemented()
 
 

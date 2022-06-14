@@ -45,7 +45,7 @@ import traceback
 import os
 
 from binaryninja.architecture import Architecture, RegisterInfo, InstructionInfo, InstructionTextToken
-from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP
+from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP, LowLevelILFunction, ExpressionIndex
 from binaryninja.binaryview import BinaryView
 from binaryninja.plugin import PluginCommand
 from binaryninja.interaction import AddressField, ChoiceField, get_form_input

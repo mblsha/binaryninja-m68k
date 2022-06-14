@@ -23,6 +23,18 @@ test_cases = [
     # lea       ($279d2e),a0
     # move      $-004(a0),$0074(a6)
     (b'\x41\xf9\x00\x27\x9d\x2e\x2d\x68\xff\xfc\x00\x74', 'LLIL_SET_REG.d(a0,LLIL_CONST_PTR.d(0x279D2E)); LLIL_STORE.d{nzvc}(LLIL_ADD.d(LLIL_REG.d(a6),LLIL_CONST.w(0x74)),LLIL_LOAD.d(LLIL_SUB.d(LLIL_REG.d(a0),LLIL_CONST.w(0x4))))'),
+
+    # beq       (data_10)
+    (b'\x67\x00\x00\x0e', 'LLIL_IF(LLIL_FLAG_COND(LowLevelILFlagCondition.LLFC_E,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x10))'),
+
+    # jmp       ($4c862)
+    (b'\x4e\xf9\x00\x04\xc8\x62', 'LLIL_JUMP(LLIL_CONST_PTR.d(0x4C862))'),
+
+    # bra       (data_28)
+    (b'\x60\x00\x00\x26', 'LLIL_JUMP(LLIL_CONST_PTR.d(0x28))'),
+
+    # dbf       d7,(data_-2c)
+    (b'\x51\xcf\xff\xd4', 'LLIL_IF(LLIL_CONST.b(0x0),6,1); LLIL_RET(LLIL_POP.d()); LLIL_SET_REG.w(temp0,LLIL_SUB.w(LLIL_REG.w(d7),LLIL_CONST.w(0x1))); LLIL_SET_REG.w(d7.w,LLIL_REG.w(temp0)); LLIL_IF(LLIL_CMP_E.w(LLIL_REG.w(temp0),LLIL_CONST.w(0xFFFF)),6,4); LLIL_JUMP(LLIL_CONST_PTR.d(0xFFFFFFD6))'),
 ]
 
 import re

@@ -3,7 +3,6 @@ from __future__ import print_function
 import struct
 import traceback
 import os
-import capstone
 
 from binaryninja.architecture import Architecture, RegisterInfo, InstructionInfo, InstructionTextToken
 from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP

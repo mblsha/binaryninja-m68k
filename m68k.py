@@ -376,12 +376,14 @@ class M68000(Architecture):
             )
         elif instr in ('muls', 'mulu'):
             if isinstance(dest, OpRegisterDirectPair):
+                print(instr, 'FIXME')
                 il.append(
                     il.set_reg_split(4,
                         dest.reg1,
                         dest.reg2,
                         il.mult(4,
                             source.get_source_il(il),
+                            # FIXME
                             dest.get_source_il(il)[0],
                             flags='nzvc'
                         )
@@ -567,8 +569,10 @@ class M68000(Architecture):
                 skip = LowLevelILLabel()
                 skip_label_found = False
 
+            print(instr, 'FIXME')
             il.append(
                 il.sub(size_bytes,
+                    # FIXME
                     third.get_source_il(il)[0],
                     source.get_source_il(il)[0],
                     flags='nzvc'
@@ -585,8 +589,10 @@ class M68000(Architecture):
 
             il.mark_label(check2)
 
+            print(instr, 'FIXME')
             il.append(
                 il.sub(size_bytes,
+                    # FIXME
                     third.get_source_il(il)[1],
                     source.get_source_il(il)[1],
                     flags='nzvc'
@@ -1741,7 +1747,7 @@ class M68000(Architecture):
         srequest = str(request)
         if not srequest in self._flags:
             self._flags[srequest] = 0
-            print(srequest, operands)
+            # print(srequest, operands)
         self._flags[srequest] += 1
 
         # if flag == 'c':

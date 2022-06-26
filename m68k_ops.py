@@ -221,6 +221,8 @@ class OpRegisterDirect(Operand):
             z = il.flag_bit(1, 'z', 2)
             n = il.flag_bit(1, 'n', 3)
             x = il.flag_bit(1, 'x', 4)
+            print(self)
+            # FIXME: return array
             return il.or_expr(1, il.or_expr(1, il.or_expr(1, il.or_expr(1, c, v), z), n), x)
         else:
             return il.reg(1 << self.size, self.reg)
@@ -269,6 +271,7 @@ class OpRegisterDirectPair(Operand):
         return (il.reg(1 << self.size, self.reg1), il.reg(1 << self.size, self.reg2))
 
     def get_dest_il(self, il: LowLevelILFunction, values, flags=0) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return (il.set_reg(1 << self.size, self.reg1, values[0], flags), il.set_reg(1 << self.size, self.reg2, values[1], flags))
 
 
@@ -316,9 +319,11 @@ class OpRegisterMovemList(Operand):
         return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return [il.reg(1 << self.size, reg) for reg in self.regs]
 
     def get_dest_il(self, il: LowLevelILFunction, values, flags=0) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return [il.set_reg(1 << self.size, reg, val, flags) for reg, val in zip(self.regs, values)]
 
 
@@ -390,9 +395,11 @@ class OpRegisterIndirectPair(Operand):
         return ((a, b), [a, b])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return (il.load(1 << self.size, il.reg(4, self.reg1)), il.load(1 << self.size, il.reg(4, self.reg2)))
 
     def get_dest_il(self, il: LowLevelILFunction, values, flags=0) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         #return (il.store(1 << self.size, il.reg(4, self.reg1), values[0], flags), il.store(1 << self.size, il.reg(4, self.reg2), values[1], flags))
         return (il.store(1 << self.size, il.reg(4, self.reg1), values[0]), il.store(1 << self.size, il.reg(4, self.reg2), values[1]))
 
@@ -418,6 +425,7 @@ class OpRegisterIndirectPostincrement(Operand):
         return None
 
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
             il.add(4,
@@ -456,6 +464,7 @@ class OpRegisterIndirectPredecrement(Operand):
         ]
 
     def get_pre_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+        # FIXME: are we correctly putting them into lists?
         return il.set_reg(4,
             self.reg,
             il.sub(4,

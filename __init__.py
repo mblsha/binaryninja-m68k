@@ -189,8 +189,11 @@ class Operand:
     def get_post_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
         raise NotImplementedError
 
-    def get_address_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
         raise NotImplementedError
+
+    def get_address_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        return self.get_address_il2(il)[0]
 
     def get_source_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
         raise NotImplementedError
@@ -218,8 +221,9 @@ class OpRegisterDirect(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.unimplemented()
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.unimplemented()
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         if self.reg == 'ccr':
@@ -286,8 +290,9 @@ class OpRegisterDirectPair(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.unimplemented()
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.unimplemented()
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return (il.reg(1 << self.size, self.reg1), il.reg(1 << self.size, self.reg2))
@@ -335,8 +340,9 @@ class OpRegisterMovemList(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.unimplemented()
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.unimplemented()
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return [il.reg(1 << self.size, reg) for reg in self.regs]
@@ -367,8 +373,9 @@ class OpRegisterIndirect(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.reg(4, self.reg)
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.reg(4, self.reg)
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -405,8 +412,11 @@ class OpRegisterIndirectPair(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return (il.reg(4, self.reg1), il.reg(4, self.reg2))
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return (il.reg(4, self.reg1), il.reg(4, self.reg2))
+        a = il.reg(4, self.reg1)
+        b = il.reg(4, self.reg2)
+        return ((a, b), [a, b])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return (il.load(1 << self.size, il.reg(4, self.reg1)), il.load(1 << self.size, il.reg(4, self.reg2)))
@@ -445,8 +455,9 @@ class OpRegisterIndirectPostincrement(Operand):
             )
         )
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.reg(4, self.reg)
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.reg(4, self.reg)
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -485,8 +496,9 @@ class OpRegisterIndirectPredecrement(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.reg(4, self.reg)
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.reg(4, self.reg)
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -527,14 +539,15 @@ class OpRegisterIndirectDisplacement(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
         if self.reg == 'pc':
-            return il.const_pointer(4, il.current_address+2+self.offset)
+            r = il.const_pointer(4, il.current_address+2+self.offset)
+            return (r, [r])
         else:
-            return il.add(4,
-                il.reg(4, self.reg),
-                il.const(2, self.offset)
-            )
+            a = il.reg(4, self.reg)
+            b = il.const(2, self.offset)
+            c = il.add(4, a, b)
+            return (c, [a, b, c])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -582,17 +595,27 @@ class OpRegisterIndirectIndex(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.add(4,
-            il.add(4,
-                il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
-                il.const(4, self.offset)
-            ),
-            il.mult(4,
-                il.reg(4 if self.ireg_long else 2, self.ireg),
-                il.const(1, self.scale)
-            )
-        )
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return il.add(4,
+        #     il.add(4,
+        #         il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
+        #         il.const(4, self.offset)
+        #     ),
+        #     il.mult(4,
+        #         il.reg(4 if self.ireg_long else 2, self.ireg),
+        #         il.const(1, self.scale)
+        #     )
+        # )
+        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        b = il.const(4, self.offset)
+        e = il.add(4, a, b)
+
+        c = il.reg(4 if self.ireg_long else 2, self.ireg)
+        d = il.const(1, self.scale)
+        f = il.mult(4, c, d)
+
+        g = il.add(4, e, f)
+        return (g, [a, b, c, d, e, f, g])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -637,16 +660,25 @@ class OpMemoryIndirect(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.add(4,
-            il.load(4,
-                il.add(4,
-                    il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
-                    il.const(4, self.offset)
-                ),
-            ),
-            il.const(4, self.outer_displacement)
-        )
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return il.add(4,
+        #     il.load(4,
+        #         il.add(4,
+        #             il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
+        #             il.const(4, self.offset)
+        #         ),
+        #     ),
+        #     il.const(4, self.outer_displacement)
+        # )
+        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        b = il.const(4, self.offset)
+        c = il.add(4, a, b)
+        d = il.load(4, c)
+
+        e = il.const(4, self.outer_displacement)
+
+        f = il.add(4, d, e)
+        return (f, [a, b, c, d, e, f])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -701,22 +733,36 @@ class OpMemoryIndirectPostindex(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.add(4,
-            il.load(4,
-                il.add(4,
-                    il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
-                    il.const(4, self.offset)
-                )
-            ),
-            il.add(4,
-                il.mult(4,
-                    il.reg(4 if self.ireg_long else 2, self.ireg),
-                    il.const(1, self.scale)
-                ),
-                il.const(4, self.outer_displacement)
-            )
-        )
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return il.add(4,
+        #     il.load(4,
+        #         il.add(4,
+        #             il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
+        #             il.const(4, self.offset)
+        #         )
+        #     ),
+        #     il.add(4,
+        #         il.mult(4,
+        #             il.reg(4 if self.ireg_long else 2, self.ireg),
+        #             il.const(1, self.scale)
+        #         ),
+        #         il.const(4, self.outer_displacement)
+        #     )
+        # )
+        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        b = il.const(4, self.offset)
+        c = il.add(4, a, b)
+        d = il.load(4, c)
+
+        e = il.reg(4 if self.ireg_long else 2, self.ireg),
+        f = il.const(1, self.scale)
+        g = il.mult(4, e, f)
+
+        h = il.const(4, self.outer_displacement)
+        i = il.add(4, g, h)
+
+        j = il.add(4, d, i)
+        return (j, [a, b, c, d, e, f, g, h, i, j])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -771,22 +817,36 @@ class OpMemoryIndirectPreindex(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.add(4,
-            il.load(4,
-                il.add(4,
-                    il.add(4,
-                        il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
-                        il.const(4, self.offset)
-                    ),
-                    il.mult(4,
-                        il.reg(4 if self.ireg_long else 2, self.ireg),
-                        il.const(1, self.scale)
-                    )
-                )
-            ),
-            il.const(4, self.outer_displacement)
-        )
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return il.add(4,
+        #     il.load(4,
+        #         il.add(4,
+        #             il.add(4,
+        #                 il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
+        #                 il.const(4, self.offset)
+        #             ),
+        #             il.mult(4,
+        #                 il.reg(4 if self.ireg_long else 2, self.ireg),
+        #                 il.const(1, self.scale)
+        #             )
+        #         )
+        #     ),
+        #     il.const(4, self.outer_displacement)
+        # )
+        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        b = il.const(4, self.offset)
+        c = il.add(4, a, b)
+
+        d = il.reg(4 if self.ireg_long else 2, self.ireg)
+        e = il.const(1, self.scale)
+        f = il.mult(4, d, e)
+
+        g = il.add(4, c, f)
+        h = il.load(4, g)
+
+        i = il.const(4, self.outer_displacement)
+        j = il.add(4, h, i)
+        return (j, [a, b, c, d, e, f, g, h, i, j])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -823,10 +883,13 @@ class OpAbsolute(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.sign_extend(self.address_width,
-            il.const(1 << self.address_size, self.address)
-        )
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        # return il.sign_extend(self.address_width,
+        #     il.const(1 << self.address_size, self.address)
+        # )
+        a = il.const(1 << self.address_size, self.address)
+        b = il.sign_extend(self.address_width, a)
+        return (b, [a, b])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(1 << self.size, self.get_address_il(il))
@@ -858,8 +921,9 @@ class OpImmediate(Operand):
     def get_post_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return None
 
-    def get_address_il(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.unimplemented()
+    def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        r = il.unimplemented()
+        return (r, [r])
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const(1 << self.size, self.value)
@@ -2885,12 +2949,17 @@ class M68000(Architecture):
             )
         elif instr in ('jmp', 'bra'):
             tmpil = LowLevelILFunction(il.arch)
-            dstil = dest.get_address_il(tmpil)
-            tmpil.append(dstil)
+            _dest_il = dest.get_address_il2(tmpil)
+            dest_il = _dest_il[0]
+            for i in _dest_il[1]:
+                tmpil.append(i)
 
             dstlabel = None
-            if tmpil[dstil].operation == LowLevelILOperation.LLIL_CONST:
-                dstlabel = il.get_label_for_address(il.arch, tmpil[dstil].constant)
+            try:
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                    dstlabel = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
+            except:
+                raise
 
             if dstlabel is not None:
                 il.append(
@@ -2914,8 +2983,10 @@ class M68000(Architecture):
                     'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'):
             flag_cond = ConditionMapping.get(instr[1:], None)
             tmpil = LowLevelILFunction(il.arch)
-            dest_il = dest.get_address_il(tmpil)
-            tmpil.append(dest_il)
+            _dest_il = dest.get_address_il2(tmpil)
+            dest_il = _dest_il[0]
+            for i in _dest_il[1]:
+                tmpil.append(i)
             cond_il = None
 
             if flag_cond is not None:
@@ -2957,8 +3028,10 @@ class M68000(Architecture):
                     'dbgt', 'dble'):
             flag_cond = ConditionMapping.get(instr[2:], None)
             tmpil = LowLevelILFunction(il.arch)
-            dest_il = dest.get_address_il(tmpil)
-            tmpil.append(dest_il)
+            _dest_il = dest.get_address_il2(tmpil)
+            dest_il = _dest_il[0]
+            for i in _dest_il[1]:
+                tmpil.append(i)
             cond_il = None
 
             if flag_cond is not None:

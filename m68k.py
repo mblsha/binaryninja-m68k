@@ -22,21 +22,7 @@ THE SOFTWARE.
 
 """
 
-from __future__ import print_function
-
-import sys
-
-__module__ = sys.modules[__name__]
-
 import binaryninja
-__logger = binaryninja.Logger(0, __module__.__name__)
-
-log = __logger.log
-log_debug = __logger.log_debug
-log_info = __logger.log_info
-log_warn = __logger.log_warn
-log_error = __logger.log_error
-log_alert = __logger.log_alert
 
 from typing import List, Optional, Tuple
 
@@ -55,8 +41,6 @@ from binaryninja.enums import (Endianness, BranchType, InstructionTextTokenType,
         LowLevelILOperation, LowLevelILFlagCondition, FlagRole, SegmentFlag,
         ImplicitRegisterExtend, SymbolType)
 from binaryninja import BinaryViewType, lowlevelil
-
-log_debug(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
 
 # Shift syles
 SHIFT_SYLE_ARITHMETIC = 0,

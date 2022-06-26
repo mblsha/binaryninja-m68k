@@ -2884,12 +2884,13 @@ class M68000(Architecture):
                 source.get_dest_il(il, il.pop(4))
             )
         elif instr in ('jmp', 'bra'):
-            dest_il = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dstil = dest.get_address_il(tmpil)
+            tmpil.append(dstil)
 
             dstlabel = None
-            # TODO: this looks like it can't ever happen, so remove?
-            if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                dstlabel = il.get_label_for_address(il.arch, il[dest_il].constant)
+            if tmpil[dstil].operation == LowLevelILOperation.LLIL_CONST:
+                dstlabel = il.get_label_for_address(il.arch, tmpil[dstil].constant)
 
             if dstlabel is not None:
                 il.append(
@@ -2897,7 +2898,7 @@ class M68000(Architecture):
                 )
             else:
                 il.append(
-                    il.jump(dest_il)
+                    il.jump(dest.get_address_il(il))
                 )
         elif instr in ('jsr', 'bsr'):
             il.append(
@@ -2912,7 +2913,9 @@ class M68000(Architecture):
         elif instr in ('bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
                     'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'):
             flag_cond = ConditionMapping.get(instr[1:], None)
-            dest_il = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dest_il = dest.get_address_il(tmpil)
+            tmpil.append(dest_il)
             cond_il = None
 
             if flag_cond is not None:
@@ -2922,9 +2925,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 t = None
-                # TODO: this looks like it can't ever happen, so remove?
-                if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                    t = il.get_label_for_address(il.arch, il[dest_il].constant)
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                    t = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
 
                 indirect = False
 
@@ -2946,7 +2948,7 @@ class M68000(Architecture):
 
                 if indirect:
                     il.mark_label(t)
-                    il.append(il.jump(dest_il))
+                    il.append(il.jump(dest.get_address_il(il)))
 
                 if not f_label_found:
                     il.mark_label(f)
@@ -2954,7 +2956,9 @@ class M68000(Architecture):
                     'dbeq', 'dbvc', 'dbvs', 'dbpl', 'dbmi', 'dbge', 'dblt',
                     'dbgt', 'dble'):
             flag_cond = ConditionMapping.get(instr[2:], None)
-            dest_il = dest.get_address_il(il)
+            tmpil = LowLevelILFunction(il.arch)
+            dest_il = dest.get_address_il(tmpil)
+            tmpil.append(dest_il)
             cond_il = None
 
             if flag_cond is not None:
@@ -2968,9 +2972,8 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             else:
                 branch = None
-                # TODO: this looks like it can't ever happen, so remove?
-                if dest_il in il and il[dest_il].operation == LowLevelILOperation.LLIL_CONST:
-                    branch = il.get_label_for_address(Architecture['M68000'], il[dest_il].constant)
+                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST:
+                    branch = il.get_label_for_address(Architecture['M68000'], tmpil[dest_il].constant)
 
                 indirect = False
 
@@ -3021,7 +3024,7 @@ class M68000(Architecture):
 
                 if indirect:
                     il.mark_label(branch)
-                    il.append(il.jump(dest_il))
+                    il.append(il.jump(dest.get_address_il(il)))
 
                 if not skip_label_found:
                     il.mark_label(skip)

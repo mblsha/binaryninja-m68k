@@ -1701,8 +1701,8 @@ class M68000(Architecture):
     def get_flag_write_low_level_il(self, op: LowLevelILOperation, size: int, write_type, flag, operands, il: LowLevelILFunction) -> ExpressionIndex:
         # special
         if flag == 'x':
-            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD) or (op == LowLevelILOperation.LLIL_NEG):
-                # subq, add, neg: x is carry
+            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD):
+                # subq, add: x is carry
                 return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
             # if (op == LowLevelILOperation.LLIL_ASR) or (op == LowLevelILOperation.LLIL_LSR):
             #     # asr, lsr: if shift is 0, x is unaffected, otherwise x is carry
@@ -1733,7 +1733,7 @@ class M68000(Architecture):
 
         if not self._flags:
             self._flags = {}
-        request = {'op': str(LowLevelILOperation(op)), 'size': size, 'write_type': write_type, 'flag': flag}
+        request = {'op': str(LowLevelILOperation(op)), 'write_type': write_type, 'flag': flag}
         srequest = str(request)
         if not srequest in self._flags:
             self._flags[srequest] = 0

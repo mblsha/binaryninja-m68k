@@ -1698,7 +1698,51 @@ class M68000(Architecture):
             il.append(il.unimplemented())
         return length
 
-    def is_never_branch_patch_available(self, data: bytes, addr: int = 0) -> bool:
+    def get_flag_write_low_level_il(self, op: LowLevelILOperation, size: int, write_type, flag, operands, il: LowLevelILFunction) -> ExpressionIndex:
+        # special
+        if flag == 'x':
+            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD) or (op == LowLevelILOperation.LLIL_NEG):
+                # subq, add, neg: x is carry
+                return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
+            # if (op == LowLevelILOperation.LLIL_ASR) or (op == LowLevelILOperation.LLIL_LSR):
+            #     # asr, lsr: if shift is 0, x is unaffected, otherwise x is carry
+            #     if operands[1] != 0:
+            #         return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
+            #     return il.flag('x')
+
+        # carry
+        if flag == 'c':
+            if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
+                # move, moveq: c is cleared
+                return il.const(1, 0)
+
+        # overflow
+        if flag == 'v':
+            if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
+                # move, moveq: v is cleared
+                return il.const(1, 0)
+
+
+        if not self._flags:
+            self._flags = {}
+        request = {'op': str(LowLevelILOperation(op)), 'size': size, 'write_type': write_type, 'flag': flag}
+        srequest = str(request)
+        if not srequest in self._flags:
+            self._flags[srequest] = 0
+            print(srequest, operands)
+        self._flags[srequest] += 1
+
+        # if flag == 'c':
+        #     if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_SBB):
+        #         # Subtraction carry flag is inverted from the commom implementation
+        #         return il.not_expr(0, self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il))
+        #     # Other operations use a normal carry flag
+        #     return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
+        # return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
+
+        return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
+
+    def is_never_branch_patch_available(self, data, addr: int = 0) -> bool:
         data = bytearray(data)
         if data[0] & 0xf0 == 0x60:
             # BRA, BSR, Bcc

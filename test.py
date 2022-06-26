@@ -2,7 +2,6 @@
 from .m68k import *
 
 test_cases = [
-    # Unimplemented instructions
     # moveq     #$0000,d0
     (b'\x70\x00', 'LLIL_SET_REG.d{nzvc}(d0,LLIL_CONST.d(0x0))'),
     # subq.b    #$1,d0

@@ -734,19 +734,19 @@ class OpMemoryIndirectPostindex(Operand):
         return None
 
     def get_address_il2(self, il) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
-        # return il.add(4,
-        #     il.load(4,
-        #         il.add(4,
-        #             il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
-        #             il.const(4, self.offset)
+        # j = il.add(4, d, i)
+        #     d = il.load(4, c)
+        #         c = il.add(4, a, b)
+        #             a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg),
+        #             b = il.const(4, self.offset)
         #         )
         #     ),
-        #     il.add(4,
-        #         il.mult(4,
-        #             il.reg(4 if self.ireg_long else 2, self.ireg),
-        #             il.const(1, self.scale)
+        #     i = il.add(4, g, h)
+        #         g = il.mult(4, e, f)
+        #             e = il.reg(4 if self.ireg_long else 2, self.ireg),
+        #             f = il.const(1, self.scale)
         #         ),
-        #         il.const(4, self.outer_displacement)
+        #         h = il.const(4, self.outer_displacement)
         #     )
         # )
         a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
@@ -756,7 +756,9 @@ class OpMemoryIndirectPostindex(Operand):
 
         e = il.reg(4 if self.ireg_long else 2, self.ireg),
         f = il.const(1, self.scale)
-        g = il.mult(4, e, f)
+        # print('here1: ', e, ' ', self.ireg_long, ' ', self.ireg)
+        # FIXME: why 'e' is a tuple with a second element missing???
+        g = il.mult(4, e[0], f)
 
         h = il.const(4, self.outer_displacement)
         i = il.add(4, g, h)

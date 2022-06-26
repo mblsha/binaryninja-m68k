@@ -4,6 +4,8 @@ from .m68k import *
 test_cases = [
     # subq.b    #$1,d0b
     (b'\x53\x00', 'LLIL_SET_REG.d(d0,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d0)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))))'),
+    # ror.b     #$1,d1
+    (b'\xe2\x19', 'LLIL_SET_REG.d(d1,LLIL_OR.d(LLIL_AND.d(LLIL_CONST.d(0xFFFFFF00),LLIL_REG.d(d1)),LLIL_AND.d(LLIL_CONST.d(0xFF),LLIL_ROR.b{*}(LLIL_REG.b(d1),LLIL_CONST.b(0x1)))))'),
 ]
 
 import re
@@ -80,7 +82,8 @@ def test_all():
             print('MISMATCH AT TEST %d!' % test_i)
             print('\t   input: %s' % data.hex())
             print('\texpected: %s' % expected)
-            print('\t  actual: %s' % actual)
+            print('\t  actual: ')
+            print(actual)
             print('\t    tree:')
             print(il_str_to_tree(actual))
             return False

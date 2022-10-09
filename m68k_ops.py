@@ -736,8 +736,6 @@ class OpMemoryIndirectPostindex(Operand):
 
         e = il.reg(4 if self.ireg_long else 2, self.ireg),
         f = il.const(1, self.scale)
-        # print('here1: ', e, ' ', self.ireg_long, ' ', self.ireg)
-        # FIXME: why 'e' is a tuple with a second element missing???
         g = il.mult(4, e[0], f)
 
         h = il.const(4, self.outer_displacement)

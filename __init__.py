@@ -2,16 +2,7 @@ import sys
 import os
 import binaryninja
 
-__module__ = sys.modules[__name__]
-__logger = binaryninja.Logger(0, __module__.__name__)
-
-log = __logger.log
-log_debug = __logger.log_debug
-log_info = __logger.log_info
-log_warn = __logger.log_warn
-log_error = __logger.log_error
-log_alert = __logger.log_alert
-
+from .logging import log_debug, __module__
 log_debug(f'm68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}')
 
 from .m68k import *

@@ -228,7 +228,7 @@ class OpRegisterDirect(Operand):
             return il.reg(1 << self.size, self.reg)
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
-        if self.reg == 'ccr':
+        if self.reg in ['ccr', 'sr']:
             return il.unimplemented()
 
         if self.size == SIZE_BYTE:
@@ -915,22 +915,3 @@ class OpImmediate(Operand):
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         return il.unimplemented()
-
-
-# condition mapping to LLIL flag conditions
-ConditionMapping = {
-    'hi': LowLevelILFlagCondition.LLFC_UGT,
-    'ls': LowLevelILFlagCondition.LLFC_ULE,
-    'cc': LowLevelILFlagCondition.LLFC_UGE,
-    'cs': LowLevelILFlagCondition.LLFC_ULT,
-    'ne': LowLevelILFlagCondition.LLFC_NE,
-    'eq': LowLevelILFlagCondition.LLFC_E,
-    'vc': LowLevelILFlagCondition.LLFC_NO,
-    'vs': LowLevelILFlagCondition.LLFC_O,
-    'pl': LowLevelILFlagCondition.LLFC_POS,
-    'mi': LowLevelILFlagCondition.LLFC_NEG,
-    'ge': LowLevelILFlagCondition.LLFC_SGE,
-    'lt': LowLevelILFlagCondition.LLFC_SLT,
-    'gt': LowLevelILFlagCondition.LLFC_SGT,
-    'le': LowLevelILFlagCondition.LLFC_SLE,
-}

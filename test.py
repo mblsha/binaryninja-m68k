@@ -1,18 +1,28 @@
 # inspired by https://github.com/Vector35/arch-arm64/blob/staging/arm64test.py
 from .m68k import *
 
+SAVE_FLAGS = ''
+RESTORE_FLAGS = ''
+FINALIZER = 'LLIL_RET(LLIL_POP.d())'
+
+if RTS_PASS_FLAGS:
+    SAVE_FLAGS = 'LLIL_SET_REG.b(rc,LLIL_FLAG(c))'
+    RESTORE_FLAGS = '; LLIL_SET_FLAG(c,LLIL_REG.b(rc))'
+    FINALIZER = SAVE_FLAGS + '; ' + FINALIZER
+
 test_cases = [
     # moveq     #$0000,d0
     (b'\x70\x00', 'LLIL_SET_REG.d{nzvc}(d0,LLIL_CONST.d(0x0))'),
+
     # subq.b    #$1,d0
     # FIXME: Generate flag 'x'
     (b'\x53\x00', 'LLIL_SET_REG.b(d0.b,LLIL_SUB.b{*}(LLIL_REG.b(d0),LLIL_CONST.b(0x1)))'),
 
     # jsr 0x5dc1c, no arguments for this call
-    (b'\x4e\xb9\x00\x05\xdc\x1c', 'LLIL_CALL(LLIL_CONST_PTR.d(0x5DC1C))'),
+    (b'\x4e\xb9\x00\x05\xdc\x1c', 'LLIL_CALL(LLIL_CONST_PTR.d(0x5DC1C))' + RESTORE_FLAGS),
 
     # at 0x53a, jsr 0x546, seems to be correctly interpreted as a call
-    (b'\x4e\xba\x00\x0a', 'LLIL_CALL(LLIL_CONST_PTR.d(0xC))'),
+    (b'\x4e\xba\x00\x0a', 'LLIL_CALL(LLIL_CONST_PTR.d(0xC))' + RESTORE_FLAGS),
 
     # lea (data_7a9ee[2]),a1
     (b'\x43\xf9\x00\x07\xa9\xf0', 'LLIL_SET_REG.d(a1,LLIL_CONST_PTR.d(0x7A9F0))'),
@@ -34,8 +44,21 @@ test_cases = [
     (b'\x60\x00\x00\x26', 'LLIL_JUMP(LLIL_CONST_PTR.d(0x28))'),
 
     # dbf       d7,(data_-2c)
-    (b'\x51\xcf\xff\xd4', 'LLIL_IF(LLIL_CONST.b(0x0),6,1); LLIL_RET(LLIL_POP.d()); LLIL_SET_REG.w(temp0,LLIL_SUB.w(LLIL_REG.w(d7),LLIL_CONST.w(0x1))); LLIL_SET_REG.w(d7.w,LLIL_REG.w(temp0)); LLIL_IF(LLIL_CMP_E.w(LLIL_REG.w(temp0),LLIL_CONST.w(0xFFFF)),6,4); LLIL_JUMP(LLIL_CONST_PTR.d(0xFFFFFFD6))'),
+    (b'\x51\xcf\xff\xd4','; '.join(['LLIL_IF(LLIL_CONST.b(0x0),6,1); ' + FINALIZER + '; LLIL_SET_REG.w(temp0,LLIL_SUB.w(LLIL_REG.w(d7),LLIL_CONST.w(0x1))); LLIL_SET_REG.w(d7.w,LLIL_REG.w(temp0)); LLIL_IF(LLIL_CMP_E.w(LLIL_REG.w(temp0),LLIL_CONST.w(0xFFFF)),6,4); LLIL_JUMP(LLIL_CONST_PTR.d(0xFFFFFFD6))'])),
+
+    # bcc       (data_5a)
+    (b'\x64\x00\x00\x58', 'LLIL_IF(LLIL_FLAG_COND(LowLevelILFlagCondition.LLFC_UGE,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x5A))'),
+
+    # rts
+    (b'\x4e\x75', ''),
 ]
+
+if RTS_PASS_FLAGS:
+    # rtr
+    test_cases.append((b'\x4e\x77', 'LLIL_SET_REG.w(ccr,LLIL_POP.w()); LLIL_RET(LLIL_POP.d())'))
+else:
+    # rtr
+    test_cases.append((b'\x4e\x77', 'LLIL_SET_REG.w(ccr,LLIL_POP.w())'))
 
 import re
 import sys
@@ -64,7 +87,7 @@ def il2str(il):
         return str(il)
 
 def instr_to_il(data):
-    RETURN = b'\x4e\x75'
+    RETURN = b'\x4e\x75' # rts
 
     platform = binaryninja.Platform['M68000']
     # make a pretend function that returns
@@ -78,7 +101,8 @@ def instr_to_il(data):
         for il in block:
             result.append(il2str(il))
     result = '; '.join(result)
-    ret = 'LLIL_RET(LLIL_POP.d())'
+
+    ret = FINALIZER
     if result.endswith(ret):
         result = result[0:result.index(ret)]
     if result.endswith('; '):
@@ -100,9 +124,19 @@ def il_str_to_tree(ilstr):
             result += '\n'
             result += '    '*depth
             pass
+        elif c == ';':
+            result += '\n'
+            depth = 0
+            result += '    '*depth
+        elif c == ' ':
+            pass
         else:
             result += c
     return result
+
+# print(il_str_to_tree('foo(bar)'))
+# print(il_str_to_tree('a(b(c,d(z),e));d(e(f))'))
+# print(il_str_to_tree('LLIL_RET(LLIL_POP.d())' + ';LLIL_RET(LLIL_POP.d())'))
 
 def test_all():
     ret = True
@@ -112,9 +146,11 @@ def test_all():
             print('MISMATCH AT TEST %d!' % test_i)
             print('\t   input: %s' % data.hex())
             print('\texpected: %s' % expected)
+            # print(il_str_to_tree(expected))
             print('\t  actual: ')
             print(actual)
             print('\t    tree:')
             print(il_str_to_tree(actual))
+            print('\n\n')
             ret = False
     return ret

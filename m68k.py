@@ -46,6 +46,42 @@ from .logging import log_debug
 from .m68k_ops import *
 from .m68k_disasm import *
 
+ConditionMapping = {
+    'hi': LowLevelILFlagCondition.LLFC_UGT, # unsigned greater than
+    'ls': LowLevelILFlagCondition.LLFC_ULE, # unsigned less than or equal
+    'cc': LowLevelILFlagCondition.LLFC_UGE, # unsigned greater than or equal
+    'cs': LowLevelILFlagCondition.LLFC_ULT, # unsigned less than
+    'ne': LowLevelILFlagCondition.LLFC_NE,  # not equal
+    'eq': LowLevelILFlagCondition.LLFC_E,   # equal
+    'vc': LowLevelILFlagCondition.LLFC_NO,  # no overflow
+    'vs': LowLevelILFlagCondition.LLFC_O,   # overflow
+    'pl': LowLevelILFlagCondition.LLFC_POS, # positive
+    'mi': LowLevelILFlagCondition.LLFC_NEG, # negative
+    'ge': LowLevelILFlagCondition.LLFC_SGE, # signed greater than or equal
+    'lt': LowLevelILFlagCondition.LLFC_SLT, # signed less than
+    'gt': LowLevelILFlagCondition.LLFC_SGT, # signed greater than or equal
+    'le': LowLevelILFlagCondition.LLFC_SLE, # signed less than or equal
+}
+FlagsRequiredForFlagCondition = {
+    LowLevelILFlagCondition.LLFC_UGT: ['c', 'z'], # hi
+    LowLevelILFlagCondition.LLFC_ULE: ['c', 'z'], # ls
+    LowLevelILFlagCondition.LLFC_UGE: ['c'], # cs
+    LowLevelILFlagCondition.LLFC_ULT: ['c'], # cs
+    LowLevelILFlagCondition.LLFC_NE:  ['z'], # ne
+    LowLevelILFlagCondition.LLFC_E:   ['z'], # eq
+    LowLevelILFlagCondition.LLFC_NO:  ['v'], # vc
+    LowLevelILFlagCondition.LLFC_O:   ['v'], # vs
+    LowLevelILFlagCondition.LLFC_POS: ['n'], # pl
+    LowLevelILFlagCondition.LLFC_NEG: ['n'], # mi
+    LowLevelILFlagCondition.LLFC_SGE: ['n', 'v'], # ge
+    LowLevelILFlagCondition.LLFC_SLT: ['n', 'v'], # lt
+    LowLevelILFlagCondition.LLFC_SGT: ['n', 'v', 'z'], # gt
+    LowLevelILFlagCondition.LLFC_SLE: ['n', 'v', 'z'], # le
+}
+
+# hack for programs that rely on flags not being modified after `rts`.
+RTS_PASS_FLAGS = False
+
 class M68000(Architecture):
     name = "M68000"
     address_size = 4
@@ -106,6 +142,12 @@ class M68000(Architecture):
         'sr':    RegisterInfo('sr', 2),
         'ccr':   RegisterInfo('sr', 1),
 
+        # fake registers to return flags from subroutines
+        'rn':    RegisterInfo('rn', 1),
+        'rz':    RegisterInfo('rz', 1),
+        'rv':    RegisterInfo('rv', 1),
+        'rc':    RegisterInfo('rc', 1),
+
         # control registers
         # MC68010/MC68020/MC68030/MC68040/CPU32
         'sfc':   RegisterInfo('sfc', 4),
@@ -147,22 +189,24 @@ class M68000(Architecture):
         'v': FlagRole.OverflowFlagRole,
         'c': FlagRole.CarryFlagRole,
     }
-    flags_required_for_flag_condition = {
-        LowLevelILFlagCondition.LLFC_UGT: ['c', 'z'], # hi
-        LowLevelILFlagCondition.LLFC_ULE: ['c', 'z'], # ls
-        LowLevelILFlagCondition.LLFC_UGE: ['c'], # cs
-        LowLevelILFlagCondition.LLFC_ULT: ['c'], # cs
-        LowLevelILFlagCondition.LLFC_NE:  ['z'], # ne
-        LowLevelILFlagCondition.LLFC_E:   ['z'], # eq
-        LowLevelILFlagCondition.LLFC_NO:  ['v'], # vc
-        LowLevelILFlagCondition.LLFC_O:   ['v'], # vs
-        LowLevelILFlagCondition.LLFC_POS: ['n'], # pl
-        LowLevelILFlagCondition.LLFC_NEG: ['n'], # mi
-        LowLevelILFlagCondition.LLFC_SGE: ['n', 'v'], # ge
-        LowLevelILFlagCondition.LLFC_SLT: ['n', 'v'], # lt
-        LowLevelILFlagCondition.LLFC_SGT: ['n', 'v', 'z'], # gt
-        LowLevelILFlagCondition.LLFC_SLE: ['n', 'v', 'z'], # le
+    # condition mapping to LLIL flag conditions
+    ConditionMapping = {
+        'hi': LowLevelILFlagCondition.LLFC_UGT,
+        'ls': LowLevelILFlagCondition.LLFC_ULE,
+        'cc': LowLevelILFlagCondition.LLFC_UGE,
+        'cs': LowLevelILFlagCondition.LLFC_ULT,
+        'ne': LowLevelILFlagCondition.LLFC_NE,
+        'eq': LowLevelILFlagCondition.LLFC_E,
+        'vc': LowLevelILFlagCondition.LLFC_NO,
+        'vs': LowLevelILFlagCondition.LLFC_O,
+        'pl': LowLevelILFlagCondition.LLFC_POS,
+        'mi': LowLevelILFlagCondition.LLFC_NEG,
+        'ge': LowLevelILFlagCondition.LLFC_SGE,
+        'lt': LowLevelILFlagCondition.LLFC_SLT,
+        'gt': LowLevelILFlagCondition.LLFC_SGT,
+        'le': LowLevelILFlagCondition.LLFC_SLE,
     }
+    flags_required_for_flag_condition = FlagsRequiredForFlagCondition
     control_registers = {
     }
     memory_indirect = False
@@ -1290,9 +1334,12 @@ class M68000(Architecture):
                     il.jump(dest.get_address_il(il))
                 )
         elif instr in ('jsr', 'bsr'):
+            # TODO: need to save 'sr' to stack?
             il.append(
                 il.call(dest.get_address_il(il))
             )
+            if RTS_PASS_FLAGS:
+                il.append(il.set_flag('c', il.reg(1, 'rc')))
         elif instr == 'callm':
             # TODO
             il.append(il.unimplemented())
@@ -1301,48 +1348,43 @@ class M68000(Architecture):
             il.append(il.unimplemented())
         elif instr in ('bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
                     'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'):
-            flag_cond = ConditionMapping.get(instr[1:], None)
+            flag_cond = ConditionMapping[instr[1:]]
+
             tmpil = LowLevelILFunction(il.arch)
             _dest_il = dest.get_address_il2(tmpil)
             dest_il = _dest_il[0]
             for i in _dest_il[1]:
                 tmpil.append(i)
-            cond_il = None
 
-            if flag_cond is not None:
-                cond_il = il.flag_condition(flag_cond)
+            t = None
+            if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST_PTR:
+                t = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
 
-            if cond_il is None:
-                il.append(il.unimplemented())
-            else:
-                t = None
-                if tmpil[dest_il].operation == LowLevelILOperation.LLIL_CONST_PTR:
-                    t = il.get_label_for_address(il.arch, tmpil[dest_il].constant)
+            indirect = False
 
-                indirect = False
+            if t is None:
+                t = LowLevelILLabel()
+                indirect = True
 
-                if t is None:
-                    t = LowLevelILLabel()
-                    indirect = True
+            f_label_found = True
 
-                f_label_found = True
+            f = il.get_label_for_address(il.arch, il.current_address+length)
 
-                f = il.get_label_for_address(il.arch, il.current_address+length)
+            if f is None:
+                f = LowLevelILLabel()
+                f_label_found = False
 
-                if f is None:
-                    f = LowLevelILLabel()
-                    f_label_found = False
+            cond_il = il.flag_condition(flag_cond)
+            il.append(
+                il.if_expr(cond_il, t, f)
+            )
 
-                il.append(
-                    il.if_expr(cond_il, t, f)
-                )
+            if indirect:
+                il.mark_label(t)
+                il.append(il.jump(dest.get_address_il(il)))
 
-                if indirect:
-                    il.mark_label(t)
-                    il.append(il.jump(dest.get_address_il(il)))
-
-                if not f_label_found:
-                    il.mark_label(f)
+            if not f_label_found:
+                il.mark_label(f)
         elif instr in ('dbt', 'dbf', 'dbhi', 'dbls', 'dbcc', 'dbcs', 'dbne',
                     'dbeq', 'dbvc', 'dbvs', 'dbpl', 'dbmi', 'dbge', 'dblt',
                     'dbgt', 'dble'):
@@ -1514,7 +1556,7 @@ class M68000(Architecture):
         elif instr == 'rtr':
             il.append(
                 il.set_reg(2,
-                    "ccr",
+                    'ccr',
                     il.pop(2)
                 )
             )
@@ -1524,6 +1566,9 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'rts':
+            if RTS_PASS_FLAGS:
+                il.append(il.set_reg(1, 'rc', il.flag('c')))
+
             il.append(
                 il.ret(
                     il.pop(4)

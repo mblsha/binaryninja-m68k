@@ -51,6 +51,12 @@ test_cases = [
 
     # rts
     (b'\x4e\x75', ''),
+
+    # andi.b    #$-2,ccr
+    (b'\x02\x3c\x00\xfe', 'LLIL_SET_FLAG(c,LLIL_CONST.b(0x0))'),
+
+    # ori.b     #$1,ccr
+    (b'\x00\x3c\x00\x01', 'LLIL_SET_FLAG(c,LLIL_CONST.b(0x1)); LLIL_SET_FLAG(x,LLIL_CONST.b(0x1))'),
 ]
 
 if RTS_PASS_FLAGS:

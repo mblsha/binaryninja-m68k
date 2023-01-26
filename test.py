@@ -35,7 +35,7 @@ test_cases = [
     (b'\x41\xf9\x00\x27\x9d\x2e\x2d\x68\xff\xfc\x00\x74', 'LLIL_SET_REG.d(a0,LLIL_CONST_PTR.d(0x279D2E)); LLIL_STORE.d{nzvc}(LLIL_ADD.d(LLIL_REG.d(a6),LLIL_CONST.w(0x74)),LLIL_LOAD.d(LLIL_SUB.d(LLIL_REG.d(a0),LLIL_CONST.w(0x4))))'),
 
     # beq       (data_10)
-    (b'\x67\x00\x00\x0e', 'LLIL_IF(LLIL_FLAG_COND(LowLevelILFlagCondition.LLFC_E,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x10))'),
+    (b'\x67\x00\x00\x0e', 'LLIL_IF(LLIL_FLAG_COND(0,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x10))'),
 
     # jmp       ($4c862)
     (b'\x4e\xf9\x00\x04\xc8\x62', 'LLIL_JUMP(LLIL_CONST_PTR.d(0x4C862))'),
@@ -47,7 +47,7 @@ test_cases = [
     (b'\x51\xcf\xff\xd4','; '.join(['LLIL_IF(LLIL_CONST.b(0x0),6,1); ' + FINALIZER + '; LLIL_SET_REG.w(temp0,LLIL_SUB.w(LLIL_REG.w(d7),LLIL_CONST.w(0x1))); LLIL_SET_REG.w(d7.w,LLIL_REG.w(temp0)); LLIL_IF(LLIL_CMP_E.w(LLIL_REG.w(temp0),LLIL_CONST.w(0xFFFF)),6,4); LLIL_JUMP(LLIL_CONST_PTR.d(0xFFFFFFD6))'])),
 
     # bcc       (data_5a)
-    (b'\x64\x00\x00\x58', 'LLIL_IF(LLIL_FLAG_COND(LowLevelILFlagCondition.LLFC_UGE,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x5A))'),
+    (b'\x64\x00\x00\x58', 'LLIL_IF(LLIL_FLAG_COND(7,None),1,3); LLIL_JUMP(LLIL_CONST_PTR.d(0x5A))'),
 
     # rts
     (b'\x4e\x75', ''),
@@ -57,6 +57,9 @@ test_cases = [
 
     # ori.b     #$1,ccr
     (b'\x00\x3c\x00\x01', 'LLIL_SET_FLAG(c,LLIL_CONST.b(0x1)); LLIL_SET_FLAG(x,LLIL_CONST.b(0x1))'),
+
+    # scs.b     d1
+    (b'\x55\xc1', 'LLIL_IF(LLIL_FLAG_COND(3,None),1,3); LLIL_SET_REG.b(d1.b,LLIL_CONST.b(0x1)); LLIL_GOTO(5); LLIL_SET_REG.b(d1.b,LLIL_CONST.b(0x0)); LLIL_GOTO(5)'),
 ]
 
 if RTS_PASS_FLAGS:

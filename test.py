@@ -60,6 +60,9 @@ test_cases = [
 
     # scs.b     d1
     (b'\x55\xc1', 'LLIL_IF(LLIL_FLAG_COND(3,None),1,3); LLIL_SET_REG.b(d1.b,LLIL_CONST.b(0x1)); LLIL_GOTO(5); LLIL_SET_REG.b(d1.b,LLIL_CONST.b(0x0)); LLIL_GOTO(5)'),
+
+    # swap      d6
+    (b'\x48\x46', 'LLIL_SET_REG.d(d6,LLIL_ROR.d(LLIL_REG.d(d6),LLIL_CONST.b(0x10)))'),
 ]
 
 if RTS_PASS_FLAGS:

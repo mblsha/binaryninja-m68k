@@ -12,10 +12,13 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-  "binja-test-mocks>=0.1.9",
+  "binja-test-mocks>=0.1.10",
   "pytest>=7.0.0",
   "ruff>=0.1.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/m68k"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,4 +44,4 @@ ignore = [
 ]
 
 [tool.uv]
-package = false
+package = true

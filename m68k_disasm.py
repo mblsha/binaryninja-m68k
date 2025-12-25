@@ -26,7 +26,8 @@ import struct
 import traceback
 import os
 
-from binaryninja.architecture import Architecture, RegisterInfo, InstructionInfo, InstructionTextToken
+from binaryninja.architecture import Architecture
+from binaryninja.function import RegisterInfo, InstructionInfo, InstructionTextToken
 from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel, LLIL_TEMP
 from binaryninja.binaryview import BinaryView
 from binaryninja.plugin import PluginCommand
@@ -875,4 +876,3 @@ class M68KDisasm:
 
         #print((instr, length, size, source, dest, third))
         return instr, length, size, source, dest, third
-

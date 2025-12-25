@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "binaryninja-m68k"
+version = "0.5.0"
+description = "Binary Ninja disassembler and lifter for the Motorola 68k architecture."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "binja-test-mocks>=0.1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "ruff>=0.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["binja-esr"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["binja-esr"]
+
+[tool.ruff.lint]
+ignore = [
+  "E402",  # imports not at top of file (legacy plugin/test layout)
+  "E501",  # line too long (legacy code)
+  "E701",  # multiple statements on one line (legacy code)
+  "E711",  # `== None` (legacy code)
+  "E713",  # `not in` (legacy code)
+  "F401",  # unused imports (plugin entrypoint relies on side effects)
+  "F403",  # `import *` used (legacy plugin layout)
+  "F405",  # names from star imports (legacy plugin layout)
+  "F811",  # redefinition from imports (legacy code)
+]
+
+[tool.uv]
+package = false

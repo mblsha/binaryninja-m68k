@@ -79,8 +79,13 @@ FlagsRequiredForFlagCondition = {
     LowLevelILFlagCondition.LLFC_SLE: ['n', 'v', 'z'], # le
 }
 
-# hack for programs that rely on flags not being modified after `rts`.
-RTS_PASS_FLAGS = False
+# Hack for binaries that use flags as a return value from subroutines.
+#
+# When enabled, `rts` writes the carry flag to a fake register (`rc`) and
+# `jsr`/`bsr` restores the carry flag from that register after the call.
+RTS_PASS_FLAGS_BY_ARCH = {
+    "M68000": True,
+}
 
 class M68000(Architecture):
     name = "M68000"
@@ -211,10 +216,12 @@ class M68000(Architecture):
     }
     memory_indirect = False
     movem_store_decremented = False
+    rts_pass_flags = False
 
     def __init__(self):
         Architecture.__init__(self)
         self.disasm = M68KDisasm(self.address_size, self.control_registers)
+        self.rts_pass_flags = RTS_PASS_FLAGS_BY_ARCH.get(self.name, False)
 
     def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: Optional[Operand], dest: Optional[Operand], third: Optional[Operand]):
         size_bytes = None
@@ -1338,7 +1345,7 @@ class M68000(Architecture):
             il.append(
                 il.call(dest.get_address_il(il))
             )
-            if RTS_PASS_FLAGS:
+            if self.rts_pass_flags:
                 il.append(il.set_flag('c', il.reg(1, 'rc')))
         elif instr == 'callm':
             # TODO
@@ -1566,7 +1573,7 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'rts':
-            if RTS_PASS_FLAGS:
+            if self.rts_pass_flags:
                 il.append(il.set_reg(1, 'rc', il.flag('c')))
 
             il.append(
@@ -2108,4 +2115,3 @@ def prompt_create_vector_table(view, addr=None):
             view.platform = Architecture[arch].standalone_platform
 
         create_vector_table(view, address, size)
-

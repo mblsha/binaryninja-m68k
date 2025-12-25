@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from binaryninja import lowlevelil
-from binja_test_mocks.mock_llil import MockFlag, MockLLIL, MockReg
+from binja_test_mocks.mock_llil import MockFlag, MockLabel, MockLLIL, MockReg
 
 m68k_test = importlib.import_module("m68k.test")
 m68k_arch = importlib.import_module("m68k.m68k")
@@ -22,7 +22,9 @@ def _lift_to_llil(data: bytes, *, start_addr: int = 0) -> list[MockLLIL]:
         assert length is not None and length > 0
         offset += length
 
-    return list(il)
+    # The mock IL appends LABEL pseudo-nodes for control-flow; ignore those so
+    # test cases can focus on the executable LLIL operations.
+    return [node for node in il if not isinstance(node, MockLabel)]
 
 
 def _disasm(data: bytes, *, start_addr: int = 0) -> str:

@@ -2,11 +2,11 @@
 
 ## Project Structure & Module Organization
 
-- `__init__.py`: Binary Ninja plugin entrypoint (registers architectures and commands).
-- `m68k.py`: core Architecture + lifter (LLIL generation).
-- `m68k_disasm.py` / `m68k_ops.py`: instruction decoding and operand helpers.
+- `__init__.py`: Binary Ninja plugin shim (registers architectures/commands when loaded by Binary Ninja).
+- `src/m68k/m68k.py`: core Architecture + lifter (LLIL generation).
+- `src/m68k/m68k_disasm.py` / `src/m68k/m68k_ops.py`: instruction decoding and operand helpers.
 - `plugin.json`: Plugin Manager metadata.
-- `test.py`: regression case data for unit tests (disassembly + LLIL expectations).
+- `src/m68k/test.py`: regression case data for unit tests (disassembly + LLIL expectations).
 - `binja-esr/`: newer, more fully-tooled variant; follow `binja-esr/AGENTS.md` when contributing there.
 
 ## Build, Test, and Development Commands
@@ -29,7 +29,7 @@ Tooling: use `uv` for dependency management and running commands.
 
 ## Testing Guidelines
 
-- Add/adjust cases in `test.py` when changing decode or lifting behavior.
+- Add/adjust cases in `src/m68k/test.py` when changing decode or lifting behavior.
 - Tests validate both disassembly output (string) and lifted LLIL (structural `MockLLIL` trees).
 - For mock-based tests, use the shared helper dependency (`binja-test-mocks` / “binja-test-helpers”) instead of duplicating Binary Ninja API stubs in this repo; if an API surface is missing, expand it upstream and bump the dependency.
 

@@ -9,7 +9,7 @@ description = "Binary Ninja disassembler and lifter for the Motorola 68k archite
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "binja-test-mocks>=0.1.7",
+  "binja-test-mocks>=0.1.8",
 ]
 
 [project.optional-dependencies]

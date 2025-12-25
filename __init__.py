@@ -1,32 +1,52 @@
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
+from pathlib import Path
 
 
-def _should_register_plugin() -> bool:
-    # When this repo is checked out into a directory with a non-importable name
-    # (e.g. `binaryninja-m68k` on GitHub Actions), pytest may import this file as
-    # a standalone module named `__init__`. Avoid side effects and relative
-    # imports in that context.
-    return bool(__package__)
+# Ensure the plugin directory is available on `sys.path` so that absolute
+# imports work when the plugin is loaded directly by Binary Ninja.
+_plugin_dir = str(Path(__file__).resolve().parent)
+if _plugin_dir not in sys.path:
+    sys.path.insert(0, _plugin_dir)
 
+def module_exists(module_name: str) -> bool:
+    if module_name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ValueError, ImportError):
+        return False
 
-if _should_register_plugin():
-    import binaryninja
+if module_exists("binaryninja") and __package__:
+    from binaryninja import Architecture, BinaryViewType, CallingConvention
+    from binaryninja.enums import Endianness
+    from binaryninja.plugin import PluginCommand
 
     from .logging import __module__, log_debug
+    from .m68k import (
+        M68000,
+        M68008,
+        M68010,
+        M68020,
+        M68030,
+        M68040,
+        M68EC040,
+        M68LC040,
+        M68330,
+        M68340,
+        prompt_create_vector_table,
+    )
 
     log_debug(f"m68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}")
 
-    from .m68k import *  # noqa: F403
-    from .test import test_all
-    from binaryninja import Architecture, CallingConvention
-
     # PluginCommand.register("Create M68k vector table", "Create M68k vector table", prompt_create_vector_table)
-    PluginCommand.register_for_address(  # type: ignore[name-defined]
+    PluginCommand.register_for_address(
         "Create M68k vector table",
         "Create M68k vector table",
-        prompt_create_vector_table,  # type: ignore[name-defined]
+        prompt_create_vector_table,
     )
 
     M68000.register()
@@ -41,7 +61,7 @@ if _should_register_plugin():
     M68340.register()
 
     # BinaryViewType['ELF'].register_arch(4, Endianness.BigEndian, Architecture['M68030'])
-    BinaryViewType["ELF"].register_arch(4, Endianness.BigEndian, Architecture["M68030"])  # type: ignore[name-defined]
+    BinaryViewType["ELF"].register_arch(4, Endianness.BigEndian, Architecture["M68030"])
 
     class ParametersInRegistersCallingConvention(CallingConvention):
         name = "ParametersInRegisters"
@@ -49,6 +69,4 @@ if _should_register_plugin():
     arch = Architecture["M68000"]
     arch.register_calling_convention(ParametersInRegistersCallingConvention(arch, "default"))
 
-    BinaryViewType["ELF"].register_arch(4, Endianness.BigEndian, Architecture["M68030"])  # type: ignore[name-defined]
-
-    test_all()
+    BinaryViewType["ELF"].register_arch(4, Endianness.BigEndian, Architecture["M68030"])

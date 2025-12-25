@@ -18,7 +18,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "binja-test-mocks", specifier = ">=0.1.7" },
+    { name = "binja-test-mocks", specifier = ">=0.1.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
 ]
@@ -26,11 +26,11 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "binja-test-mocks"
-version = "0.1.7"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/7e/e3f12cbfbf2f170fa06d23d346cccf830f72cc11a7632b3d81c84942c160/binja_test_mocks-0.1.7.tar.gz", hash = "sha256:91a5d15659e1de2aed83f061029ee176f9d3196e9a9e38952a8ae9733ec6158c", size = 23579 }
+sdist = { url = "https://files.pythonhosted.org/packages/51/26/82a0b6878bfb91cc8b08b46c3eea363a7c49f8acd263f52c08b634d465d1/binja_test_mocks-0.1.8.tar.gz", hash = "sha256:7cccbe50cd2c64ca45aeb672feae761f3fd82d704de21418b0e76ad6003b5c83", size = 23704 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/85/7e28f778265b89abc5656fb7a7449ff1197523b7aae466482f63b7a1601e/binja_test_mocks-0.1.7-py3-none-any.whl", hash = "sha256:90478540b78c747eb7f3e26fcc31711840086cfe5d65f066cb64e57bcab01395", size = 27825 },
+    { url = "https://files.pythonhosted.org/packages/31/7e/b24badd4cce9e126f4436b474a1951f0dbe58f7fa755e6d4f927cc457d7c/binja_test_mocks-0.1.8-py3-none-any.whl", hash = "sha256:d953a273d5d23f557f7ab3248fbd1ca0edd13c3b3722dcb3d9825e53dc83a021", size = 27878 },
 ]
 
 [[package]]

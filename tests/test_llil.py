@@ -25,6 +25,22 @@ def _lift_to_llil(data: bytes, *, start_addr: int = 0) -> list[MockLLIL]:
     return list(il)
 
 
+def _disasm(data: bytes, *, start_addr: int = 0) -> str:
+    arch = m68k_arch.M68000()
+
+    offset = 0
+    lines: list[str] = []
+    while offset < len(data):
+        result = arch.get_instruction_text(data[offset:], start_addr + offset)
+        assert result is not None
+        tokens, length = result
+        assert length is not None and length > 0
+        lines.append("".join(token.text for token in tokens).rstrip())
+        offset += length
+
+    return "\n".join(lines)
+
+
 def _mask_for_size(size_bytes: int) -> int:
     return (1 << (size_bytes * 8)) - 1
 
@@ -77,7 +93,7 @@ def assert_llil(actual: list[MockLLIL], expected: list[MockLLIL]) -> None:
         _match_node(act, exp, label_bindings)
 
 
-@pytest.mark.parametrize("data, expected", m68k_test.test_cases)
-def test_llil_regressions(data: bytes, expected: list[MockLLIL]) -> None:
-    assert_llil(_lift_to_llil(data), expected)
-
+@pytest.mark.parametrize("data, expected_disasm, expected_llil", m68k_test.test_cases)
+def test_llil_regressions(data: bytes, expected_disasm: str, expected_llil: list[MockLLIL]) -> None:
+    assert _disasm(data) == expected_disasm
+    assert_llil(_lift_to_llil(data), expected_llil)

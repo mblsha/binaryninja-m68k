@@ -21,6 +21,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["binja-esr"]
+addopts = ["--import-mode=importlib"]
 
 [tool.ruff]
 line-length = 120

@@ -8,12 +8,11 @@ version = "0.5.0"
 description = "Binary Ninja disassembler and lifter for the Motorola 68k architecture."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-  "binja-test-mocks>=0.1.9",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
+  "binja-test-mocks>=0.1.9",
   "pytest>=7.0.0",
   "ruff>=0.1.0",
 ]

@@ -6,19 +6,17 @@ requires-python = ">=3.11"
 name = "binaryninja-m68k"
 version = "0.5.0"
 source = { virtual = "." }
-dependencies = [
-    { name = "binja-test-mocks" },
-]
 
 [package.optional-dependencies]
 dev = [
+    { name = "binja-test-mocks" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "binja-test-mocks", specifier = ">=0.1.9" },
+    { name = "binja-test-mocks", marker = "extra == 'dev'", specifier = ">=0.1.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
 ]

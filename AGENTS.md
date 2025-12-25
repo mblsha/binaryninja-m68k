@@ -25,7 +25,7 @@ Tooling: use `uv` for dependency management and running commands.
 - Python 3, 4-space indentation; keep changes small and readable.
 - Prefer type hints where practical (matches the existing `m68k.py` style).
 - Naming: `snake_case` for functions/variables, `CamelCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Use `logging.py` (`log_debug`, `log_info`, …) instead of `print` so output goes to the Binary Ninja log.
+- Prefer plain `print(...)` for lightweight diagnostics; avoid importing `binaryninja.log` at import time so unit tests (and mocks) stay simple.
 
 ## Testing Guidelines
 
@@ -36,7 +36,7 @@ Tooling: use `uv` for dependency management and running commands.
 ## Commit & Pull Request Guidelines
 
 - Commits use short, imperative summaries (e.g., “Fix TST flags”, “Add tests for calling functions”).
-- PRs should include: what instructions/flags changed, how to reproduce, and confirmation that `test_all()` passes (or why it cannot).
+- PRs should include: what instructions/flags changed, how to reproduce, and confirmation that `uv run pytest` passes (or why it cannot).
 - Open PRs against `mblsha/binaryninja-m68k` (this fork) unless explicitly coordinating with upstream; with GitHub CLI use `gh pr create --repo mblsha/binaryninja-m68k ...` to avoid targeting `galenbwill/binaryninja-m68k` by default.
 
 ## CI & Git Tips

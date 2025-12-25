@@ -39,6 +39,7 @@ Tooling: use `uv` for dependency management and running commands.
 
 - Commits use short, imperative summaries (e.g., “Fix TST flags”, “Add tests for calling functions”).
 - PRs should include: what instructions/flags changed, how to reproduce, and confirmation that `test_all()` passes (or why it cannot).
+- Open PRs against `mblsha/binaryninja-m68k` (this fork) unless explicitly coordinating with upstream; with GitHub CLI use `gh pr create --repo mblsha/binaryninja-m68k ...` to avoid targeting `galenbwill/binaryninja-m68k` by default.
 
 ## CI & Git Tips
 

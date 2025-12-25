@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -21,11 +20,9 @@ def module_exists(module_name: str) -> bool:
         return False
 
 if module_exists("binaryninja") and __package__:
-    from binaryninja import Architecture, BinaryViewType, CallingConvention
+    from binaryninja import Architecture, BinaryViewType, CallingConvention, PluginCommand
     from binaryninja.enums import Endianness
-    from binaryninja.plugin import PluginCommand
 
-    from .logging import __module__, log_debug
     from .m68k import (
         M68000,
         M68008,
@@ -40,7 +37,7 @@ if module_exists("binaryninja") and __package__:
         prompt_create_vector_table,
     )
 
-    log_debug(f"m68k Plugin loaded from: {os.path.dirname(__module__.__loader__.path)}")
+    print(f"m68k Plugin loaded from: {_plugin_dir}")
 
     # PluginCommand.register("Create M68k vector table", "Create M68k vector table", prompt_create_vector_table)
     PluginCommand.register_for_address(
@@ -68,5 +65,3 @@ if module_exists("binaryninja") and __package__:
 
     arch = Architecture["M68000"]
     arch.register_calling_convention(ParametersInRegistersCallingConvention(arch, "default"))
-
-    BinaryViewType["ELF"].register_arch(4, Endianness.BigEndian, Architecture["M68030"])

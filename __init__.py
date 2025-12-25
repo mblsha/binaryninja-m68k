@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -37,9 +38,48 @@ def module_exists(module_name: str) -> bool:
     except (ValueError, ImportError):
         return False
 
-_force_mock = os.environ.get("FORCE_BINJA_MOCK", "").lower() in ("1", "true", "yes")
+def _running_inside_binary_ninja() -> bool:
+    try:
+        if module_exists("binaryninjaui"):
+            return True
+    except Exception:
+        pass
 
-if module_exists("binaryninja") and __package__ and not _force_mock:
+    exe = (sys.executable or "").lower()
+    if "binary ninja.app" in exe:
+        return True
+    return os.path.basename(exe) in ("binaryninja", "binaryninja.exe")
+
+
+_force_mock_requested = os.environ.get("FORCE_BINJA_MOCK", "").lower() in ("1", "true", "yes")
+_running_binja = _running_inside_binary_ninja()
+_skip_registration = _force_mock_requested and not _running_binja
+
+print(
+    "m68k[debug] shim loaded "
+    f"(name={__name__!r}, package={__package__!r}, plugin_dir={_plugin_dir}, "
+    f"force_mock={_force_mock_requested}, running_binja={_running_binja})"
+)
+print(f"m68k[debug] implementation_dir={_src_pkg_dir} exists={_src_pkg_dir.is_dir()}")
+
+_has_binaryninja = module_exists("binaryninja")
+print(f"m68k[debug] binaryninja_available={_has_binaryninja} will_register={bool(_has_binaryninja and __package__ and not _skip_registration)}")
+
+if _has_binaryninja and __package__ and not _skip_registration:
     from ._bn_plugin import register
 
-    register(plugin_dir=_plugin_dir)
+    print("m68k[debug] calling _bn_plugin.register()")
+    try:
+        register(plugin_dir=_plugin_dir)
+    except Exception:
+        print("m68k[debug] _bn_plugin.register() raised:")
+        traceback.print_exc()
+        raise
+    print("m68k[debug] _bn_plugin.register() completed")
+else:
+    if not __package__:
+        print("m68k[debug] skipping registration (not imported as a package)")
+    elif _skip_registration:
+        print("m68k[debug] skipping registration (FORCE_BINJA_MOCK set and not running inside Binary Ninja)")
+    elif not _has_binaryninja:
+        print("m68k[debug] skipping registration (binaryninja module not available)")

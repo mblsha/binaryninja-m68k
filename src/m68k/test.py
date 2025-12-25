@@ -31,16 +31,18 @@ test_cases: list[tuple[bytes, str, list[MockLLIL]]] = []
 if _running_under_pytest() and not _running_inside_binary_ninja():
     from binja_test_mocks.mock_llil import MockFlag, MockLLIL, mllil, mreg
 
-    from .m68k import RTS_PASS_FLAGS
+    from .m68k import M68000
+
+    _RTS_PASS_FLAGS = M68000().rts_pass_flags
 
     def _maybe_restore_flags() -> list[MockLLIL]:
-        if not RTS_PASS_FLAGS:
+        if not _RTS_PASS_FLAGS:
             return []
         return [mllil("SET_FLAG", [MockFlag("c"), mllil("REG.b", [mreg("rc")])])]
 
     def _rts_expected() -> list[MockLLIL]:
         out: list[MockLLIL] = []
-        if RTS_PASS_FLAGS:
+        if _RTS_PASS_FLAGS:
             out.append(mllil("SET_REG.b", [mreg("rc"), mllil("FLAG", [MockFlag("c")])]))
         out.append(mllil("RET", [mllil("POP.d", [])]))
         return out

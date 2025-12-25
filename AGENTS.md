@@ -6,7 +6,7 @@
 - `m68k.py`: core Architecture + lifter (LLIL generation).
 - `m68k_disasm.py` / `m68k_ops.py`: instruction decoding and operand helpers.
 - `plugin.json`: Plugin Manager metadata.
-- `test.py`: LLIL regression tests (requires Binary Ninja’s Python API).
+- `test.py`: regression case data for unit tests (disassembly + LLIL expectations).
 - `binja-esr/`: newer, more fully-tooled variant; follow `binja-esr/AGENTS.md` when contributing there.
 
 ## Build, Test, and Development Commands
@@ -19,8 +19,6 @@ Tooling: use `uv` for dependency management and running commands.
 
 - Load locally: place this folder in your Binary Ninja plugins directory and restart Binary Ninja.
 - Syntax-only check (no Binary Ninja required): `python3 -m compileall .`
-- Run tests inside Binary Ninja’s Python environment:
-  - In the Binary Ninja scripting console: `from m68k.test import test_all; assert test_all()`
 
 ## Coding Style & Naming Conventions
 
@@ -32,7 +30,7 @@ Tooling: use `uv` for dependency management and running commands.
 ## Testing Guidelines
 
 - Add/adjust cases in `test.py` when changing decode or lifting behavior.
-- Tests compare LLIL string output; update expected strings only for intentional behavior changes (note the Binary Ninja version if the IL printer changed).
+- Tests validate both disassembly output (string) and lifted LLIL (structural `MockLLIL` trees).
 - For mock-based tests, use the shared helper dependency (`binja-test-mocks` / “binja-test-helpers”) instead of duplicating Binary Ninja API stubs in this repo; if an API surface is missing, expand it upstream and bump the dependency.
 
 ## Commit & Pull Request Guidelines

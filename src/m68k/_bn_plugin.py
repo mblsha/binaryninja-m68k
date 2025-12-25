@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 
 def register(*, plugin_dir: Path) -> None:
-    debug = os.environ.get("M68K_DEBUG", "").lower() in ("1", "true", "yes")
-
     def _debug(msg: str) -> None:
-        if debug:
-            print(f"m68k[debug] {msg}")
+        print(f"m68k[debug] {msg}")
 
-    _debug("Starting plugin registration")
+    _debug(f"Starting plugin registration (plugin_dir={plugin_dir})")
 
     from binaryninja import Architecture, BinaryViewType, CallingConvention, PluginCommand
     from binaryninja.enums import Endianness

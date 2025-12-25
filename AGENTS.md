@@ -16,7 +16,6 @@ Tooling: use `uv` for dependency management and running commands.
 - Install dev deps: `uv sync --extra dev`
 - Lint: `uv run ruff check .`
 - Unit tests (uses mocks, no Binary Ninja required): `uv run pytest`
-- Plugin init always prints debug output (useful when diagnosing load/registration issues).
 
 - Load locally: place this folder in your Binary Ninja plugins directory and restart Binary Ninja.
 - Syntax-only check (no Binary Ninja required): `python3 -m compileall .`

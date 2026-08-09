@@ -52,7 +52,14 @@ class M68KDisasm:
         self.memory_indirect = memory_indirect
         self.cpu32 = cpu32
 
-    def decode_effective_address(self, mode: int, register: int, data: bytes, size: Optional[int] = None) -> Tuple[Optional[Operand], Optional[int]]:
+    def decode_effective_address(
+        self,
+        mode: int,
+        register: int,
+        data: bytes,
+        size: Optional[int] = None,
+        pc_offset: int = 2,
+    ) -> Tuple[Optional[Operand], Optional[int]]:
         mode &= 0x07
         register &= 0x07
 
@@ -94,7 +101,7 @@ class M68KDisasm:
                 return (OpAbsolute(size, struct.unpack_from('>L', data, 0)[0], 2, self.address_size), 4)
             elif register == 2:
                 # program counter indirect with displacement
-                return (OpRegisterIndirectDisplacement(size, 'pc', struct.unpack_from('>h', data, 0)[0]), 2)
+                return (OpRegisterIndirectDisplacement(size, 'pc', struct.unpack_from('>h', data, 0)[0], pc_offset), 2)
             elif register == 3:
                 # extended addressing mode
                 reg = 'pc'
@@ -172,16 +179,16 @@ class M68KDisasm:
 
                 # No memory indirection.
                 if extra & 7 == 0:
-                    return (OpRegisterIndirectIndex(size, base_reg, bd, index_reg, index_size, scale), length)
+                    return (OpRegisterIndirectIndex(size, base_reg, bd, index_reg, index_size, scale, pc_offset), length)
 
                 if not self.memory_indirect:
                     return (None, None)
                 if index_reg is None:
-                    return (OpMemoryIndirect(size, base_reg, bd, od), length)
+                    return (OpMemoryIndirect(size, base_reg, bd, od, pc_offset), length)
                 elif indirect_selection & 4:
-                    return (OpMemoryIndirectPostindex(size, base_reg, bd, index_reg, index_size, scale, od), length)
+                    return (OpMemoryIndirectPostindex(size, base_reg, bd, index_reg, index_size, scale, od, pc_offset), length)
                 else:
-                    return (OpMemoryIndirectPreindex(size, base_reg, bd, index_reg, index_size, scale, od), length)
+                    return (OpMemoryIndirectPreindex(size, base_reg, bd, index_reg, index_size, scale, od, pc_offset), length)
             else:
                 # brief extension word
                 # 8 bit displacement
@@ -190,11 +197,128 @@ class M68KDisasm:
                     d8 -= 256
                 if self.isa_level < 2 and not self.cpu32:
                     scale = 1
-                return (OpRegisterIndirectIndex(size, reg, d8, xn, index_size, scale), length)
+                return (OpRegisterIndirectIndex(size, reg, d8, xn, index_size, scale, pc_offset), length)
 
         return (None, None)
 
+    @staticmethod
+    def _is_address_register(operand: Optional[Operand]) -> bool:
+        return isinstance(operand, OpRegisterDirect) and (operand.reg.startswith('a') or operand.reg == 'sp')
+
+    @staticmethod
+    def _is_data_register(operand: Optional[Operand]) -> bool:
+        return isinstance(operand, OpRegisterDirect) and operand.reg.startswith('d')
+
+    @staticmethod
+    def _is_pc_relative(operand: Optional[Operand]) -> bool:
+        return getattr(operand, 'reg', None) == 'pc'
+
+    @classmethod
+    def _is_memory(cls, operand: Optional[Operand]) -> bool:
+        return isinstance(
+            operand,
+            (
+                OpRegisterIndirect,
+                OpRegisterIndirectPostincrement,
+                OpRegisterIndirectPredecrement,
+                OpRegisterIndirectDisplacement,
+                OpRegisterIndirectIndex,
+                OpMemoryIndirect,
+                OpMemoryIndirectPostindex,
+                OpMemoryIndirectPreindex,
+                OpAbsolute,
+            ),
+        )
+
+    @classmethod
+    def _is_memory_alterable(cls, operand: Optional[Operand]) -> bool:
+        return cls._is_memory(operand) and not cls._is_pc_relative(operand)
+
+    @classmethod
+    def _is_data_alterable(cls, operand: Optional[Operand]) -> bool:
+        return cls._is_data_register(operand) or cls._is_memory_alterable(operand)
+
+    @classmethod
+    def _is_data_source(cls, operand: Optional[Operand]) -> bool:
+        return operand is not None and not cls._is_address_register(operand) and not isinstance(
+            operand, (OpRegisterMovemList, OpRegisterDirectPair, OpRegisterIndirectPair)
+        )
+
+    @classmethod
+    def _is_control(cls, operand: Optional[Operand]) -> bool:
+        return isinstance(
+            operand,
+            (
+                OpRegisterIndirect,
+                OpRegisterIndirectDisplacement,
+                OpRegisterIndirectIndex,
+                OpMemoryIndirect,
+                OpMemoryIndirectPostindex,
+                OpMemoryIndirectPreindex,
+                OpAbsolute,
+            ),
+        )
+
+    def _valid_instruction_operands(
+        self,
+        instr: str,
+        size: Optional[int],
+        source: Optional[Operand],
+        dest: Optional[Operand],
+        third: Optional[Operand],
+    ) -> bool:
+        if size == 3:
+            return False
+        if instr == 'movea':
+            return size in (SIZE_WORD, SIZE_LONG) and self._is_address_register(dest)
+        if instr == 'move':
+            if isinstance(source, OpRegisterDirect) and source.reg in ('ccr', 'sr', 'usp'):
+                return True
+            if isinstance(dest, OpRegisterDirect) and dest.reg in ('ccr', 'sr', 'usp'):
+                return True
+            return self._is_data_alterable(dest) and not (size == SIZE_BYTE and self._is_address_register(source))
+        if instr in ('ori', 'andi', 'eori') and isinstance(dest, OpRegisterDirect) and dest.reg in ('ccr', 'sr'):
+            return (dest.reg == 'ccr' and size == SIZE_BYTE) or (dest.reg == 'sr' and size == SIZE_WORD)
+        if instr in ('ori', 'andi', 'eori', 'addi', 'subi', 'cmpi'):
+            return self._is_data_alterable(dest)
+        if instr in ('addq', 'subq'):
+            return (self._is_address_register(dest) and size in (SIZE_WORD, SIZE_LONG)) or self._is_data_alterable(dest)
+        if instr in ('jsr', 'jmp', 'lea', 'pea', 'callm'):
+            operand = source if instr == 'lea' else dest
+            return self._is_control(operand)
+        if instr == 'chk':
+            return (self.isa_level >= 2 or self.cpu32 or size == SIZE_WORD) and self._is_data_source(source)
+        if instr in ('cas',):
+            return self._is_memory_alterable(third)
+        if instr in ('bchg', 'bclr', 'bset'):
+            return self._is_data_alterable(dest)
+        if instr == 'btst':
+            return self._is_data_register(dest) or self._is_memory(dest)
+        if instr in (
+            'clr', 'neg', 'negx', 'not', 'nbcd', 'tas',
+            'st', 'sf', 'shi', 'sls', 'scc', 'scs', 'sne', 'seq',
+            'svc', 'svs', 'spl', 'smi', 'sge', 'slt', 'sgt', 'sle',
+        ):
+            return self._is_data_alterable(dest)
+        if instr in ('asl', 'asr', 'lsl', 'lsr', 'rol', 'ror', 'roxl', 'roxr') and source is None:
+            return self._is_memory_alterable(dest)
+        if instr in ('muls', 'mulu', 'divs', 'divu', 'divsl', 'divul'):
+            return self._is_data_source(source)
+        if instr in ('or', 'and', 'eor', 'add', 'sub'):
+            return self._is_data_alterable(dest) and self._is_data_source(source)
+        return True
+
     def decode_instruction(self, data: bytes, addr: int) -> Tuple[str, int, Optional[int], Optional[Operand], Optional[Operand], Optional[Operand]]:
+        error_value = ('unimplemented', min(len(data), 2), None, None, None, None)
+        try:
+            result = self._decode_instruction(data, addr)
+        except (IndexError, struct.error):
+            return error_value
+        if result[1] > len(data):
+            return error_value
+        return result
+
+    def _decode_instruction(self, data: bytes, addr: int) -> Tuple[str, int, Optional[int], Optional[Operand], Optional[Operand], Optional[Operand]]:
         error_value = ('unimplemented', min(len(data), 2), None, None, None, None)
         if len(data) < 2:
             return error_value
@@ -228,7 +352,9 @@ class M68KDisasm:
                         return error_value
                     instr = 'callm'
                     source = OpImmediate(SIZE_BYTE, struct.unpack_from('>B', data, 3)[0])
-                    dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[4:], SIZE_BYTE) # check
+                    dest, extra_dest = self.decode_effective_address(
+                        instruction >> 3, instruction, data[4:], SIZE_BYTE, pc_offset=4
+                    ) # check
                     if extra_dest is None:
                         return error_value
                     length = 4+extra_dest
@@ -241,7 +367,9 @@ class M68KDisasm:
                         instr = 'chk2'
                     else:
                         instr = 'cmp2'
-                    source, extra_source = self.decode_effective_address(instruction >> 3, instruction, data[4:], size)
+                    source, extra_source = self.decode_effective_address(
+                        instruction >> 3, instruction, data[4:], size, pc_offset=4
+                    )
                     dest = OpRegisterDirect(size, Registers[(extra >> 12) & 15])
                     if extra_source is None:
                         return error_value
@@ -264,7 +392,9 @@ class M68KDisasm:
                     extra = struct.unpack_from('>H', data, 2)[0]
                     source = OpRegisterDirect(size, Registers[extra & 7])
                     dest = OpRegisterDirect(size, Registers[(extra >> 6) & 7])
-                    third, extra_third = self.decode_effective_address(instruction >> 3, instruction, data[4:], size)
+                    third, extra_third = self.decode_effective_address(
+                        instruction >> 3, instruction, data[4:], size, pc_offset=4
+                    )
                     if extra_third is None:
                         return error_value
                     length = 4+extra_third
@@ -291,7 +421,13 @@ class M68KDisasm:
                     dest = OpRegisterDirect(size, 'sr')
                     extra_dest = 0
                 else:
-                    dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[2+extra_source:], size)
+                    dest, extra_dest = self.decode_effective_address(
+                        instruction >> 3,
+                        instruction,
+                        data[2+extra_source:],
+                        size,
+                        pc_offset=2+extra_source,
+                    )
 
                 if dest is None:
                     instr = None
@@ -308,7 +444,9 @@ class M68KDisasm:
                 elif instruction & 0xffc0 == 0x08C0:
                     instr = 'bset'
                 source = OpImmediate(SIZE_BYTE, struct.unpack_from('>B', data, 3)[0])
-                dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[4:], SIZE_BYTE)
+                dest, extra_dest = self.decode_effective_address(
+                    instruction >> 3, instruction, data[4:], SIZE_BYTE, pc_offset=4
+                )
                 if isinstance(dest, OpRegisterDirect):
                     dest.size = SIZE_LONG
                 if dest is None:
@@ -349,7 +487,9 @@ class M68KDisasm:
                 extra = struct.unpack_from('>H', data, 2)[0]
                 size = (instruction >> 6) & 3
                 dest = OpRegisterDirect(size, Registers[extra >> 12])
-                source, extra_source = self.decode_effective_address(instruction >> 3, instruction, data[4:], size)
+                source, extra_source = self.decode_effective_address(
+                    instruction >> 3, instruction, data[4:], size, pc_offset=4
+                )
                 if extra & 0x0800:
                     source, dest = dest, source
                 if extra_source is None:
@@ -385,16 +525,18 @@ class M68KDisasm:
             extra_dest = 0
             size = None
             skip_ea = False
-            if instruction & 0xf100 == 0x4100:
+            if instruction & 0xfff8 == 0x49c0:
+                if self.isa_level < 2 and not self.cpu32:
+                    return error_value
+                instr = 'extb'
+                size = SIZE_LONG
+                dest = OpRegisterDirect(size, Registers[instruction & 7])
+                skip_ea = True
+            elif instruction & 0xf100 == 0x4100:
                 # lea, extb, chk
                 if instruction & 0xf1c0 == 0x41c0:
-                    if instruction & 0x0038:
-                        instr = 'lea'
-                        dest = OpRegisterDirect(SIZE_LONG, Registers[((instruction >> 9) & 7) + 8])
-                    else:
-                        if self.isa_level < 2 and not self.cpu32:
-                            return error_value
-                        instr = 'extb'
+                    instr = 'lea'
+                    dest = OpRegisterDirect(SIZE_LONG, Registers[((instruction >> 9) & 7) + 8])
                     size = SIZE_LONG
                 else:
                     instr = 'chk'
@@ -478,7 +620,13 @@ class M68KDisasm:
                         source = OpRegisterMovemList(size, reg_list)
                     else:
                         instr = 'ext'
-                    dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[2+extra_source:], size)
+                    dest, extra_dest = self.decode_effective_address(
+                        instruction >> 3,
+                        instruction,
+                        data[2+extra_source:],
+                        size,
+                        pc_offset=2+extra_source,
+                    )
                     skip_ea = True
                     if instruction & 0x0400:
                         source, dest = dest, source
@@ -501,7 +649,13 @@ class M68KDisasm:
                     size = SIZE_LONG
                     extra_dest = 2
                     extra = struct.unpack_from('>H', data, 2)[0]
-                    source, extra_source = self.decode_effective_address(instruction >> 3, instruction, data[2+extra_dest:], size)
+                    source, extra_source = self.decode_effective_address(
+                        instruction >> 3,
+                        instruction,
+                        data[2+extra_dest:],
+                        size,
+                        pc_offset=2+extra_dest,
+                    )
                     dh = Registers[extra & 7]
                     dl = Registers[(extra >> 12) & 7]
                     dest = OpRegisterDirect(size, dl)
@@ -777,7 +931,9 @@ class M68KDisasm:
                     instr = 'subx'
                     if source.reg[0] == 'a' or source.reg == 'sp':
                         source = OpRegisterIndirectPredecrement(size, source.reg)
-                        dest = OpRegisterIndirectPredecrement(size, dest.reg)
+                        dest = OpRegisterIndirectPredecrement(
+                            size, Registers[((instruction >> 9) & 7) + 8]
+                        )
                 else:
                     source, dest = dest, source
             if extra_source is None:
@@ -876,7 +1032,9 @@ class M68KDisasm:
                     instr = 'addx'
                     if source.reg[0] == 'a' or source.reg == 'sp':
                         source = OpRegisterIndirectPredecrement(size, source.reg)
-                        dest = OpRegisterIndirectPredecrement(size, dest.reg)
+                        dest = OpRegisterIndirectPredecrement(
+                            size, Registers[((instruction >> 9) & 7) + 8]
+                        )
                 else:
                     source, dest = dest, source
             if extra_source is None:
@@ -939,6 +1097,9 @@ class M68KDisasm:
         if instr is None:
             # FIXME uncomment to debug
             #log_error('Bad opcode at 0x{:x}'.format(addr))
+            return error_value
+
+        if not self._valid_instruction_operands(instr, size, source, dest, third):
             return error_value
 
         #print((instr, length, size, source, dest, third))

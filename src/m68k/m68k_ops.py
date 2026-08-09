@@ -169,11 +169,11 @@ def _address_register_step(reg: str, size: int) -> int:
     return 1 << size
 
 
-def _base_register_il(il: LowLevelILFunction, reg: Optional[str]) -> ExpressionIndex:
+def _base_register_il(il: LowLevelILFunction, reg: Optional[str], pc_offset: int = 2) -> ExpressionIndex:
     if reg is None:
         return il.const(4, 0)
     if reg == 'pc':
-        return il.const_pointer(4, il.current_address + 2)
+        return il.const_pointer(4, il.current_address + pc_offset)
     return il.reg(4, reg)
 
 
@@ -232,6 +232,33 @@ class Operand:
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> Optional[ExpressionIndex]:
         raise NotImplementedError
+
+
+class OpResolvedValue(Operand):
+    """A source operand whose value was captured before another EA side effect."""
+
+    def __init__(self, size: int, temp: int):
+        self.size = size
+        self.temp = temp
+
+    def format(self, addr: int) -> List[InstructionTextToken]:
+        return []
+
+    def get_pre_il(self, il: LowLevelILFunction) -> None:
+        return None
+
+    def get_post_il(self, il: LowLevelILFunction) -> None:
+        return None
+
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[None, List[ExpressionIndex]]:
+        return (None, [])
+
+    def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
+        return il.reg(1 << self.size, LLIL_TEMP(self.temp))
+
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
+        return il.unimplemented()
+
 
 class OpRegisterDirect(Operand):
     def __init__(self, size: int, reg: str):
@@ -532,10 +559,11 @@ class OpRegisterIndirectPredecrement(Operand):
 
 
 class OpRegisterIndirectDisplacement(Operand):
-    def __init__(self, size: int, reg: str, offset: int):
+    def __init__(self, size: int, reg: str, offset: int, pc_offset: int = 2):
         self.size = size
         self.reg = reg
         self.offset = offset
+        self.pc_offset = pc_offset
 
     def __repr__(self):
         return "OpRegisterIndirectDisplacement(%d, %s, 0x%x)" % (self.size, self.reg, self.offset)
@@ -544,7 +572,7 @@ class OpRegisterIndirectDisplacement(Operand):
         if self.reg == 'pc':
             return [
                 InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("),
-                InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, "${:08x}".format(addr+2+self.offset), addr+2+self.offset, 4),
+                InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, "${:08x}".format(addr+self.pc_offset+self.offset), addr+self.pc_offset+self.offset, 4),
                 InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")")
             ]
         else:
@@ -564,7 +592,7 @@ class OpRegisterIndirectDisplacement(Operand):
 
     def get_address_il2(self, il: LowLevelILFunction) -> Tuple[ExpressionIndex, List[ExpressionIndex]]:
         if self.reg == 'pc':
-            r = il.const_pointer(4, il.current_address+2+self.offset)
+            r = il.const_pointer(4, il.current_address+self.pc_offset+self.offset)
             return (r, [r])
         else:
             a = il.reg(4, self.reg)
@@ -584,13 +612,14 @@ class OpRegisterIndirectDisplacement(Operand):
 
 
 class OpRegisterIndirectIndex(Operand):
-    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: int, scale: int):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: int, scale: int, pc_offset: int = 2):
         self.size = size
         self.reg = reg
         self.offset = offset
         self.ireg = ireg
         self.ireg_long = ireg_long
         self.scale = scale
+        self.pc_offset = pc_offset
 
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, 0x%x, %s, %d, %d)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale)
@@ -632,7 +661,7 @@ class OpRegisterIndirectIndex(Operand):
         #         il.const(1, self.scale)
         #     )
         # )
-        a = _base_register_il(il, self.reg)
+        a = _base_register_il(il, self.reg, self.pc_offset)
         b = il.const(4, self.offset)
         e = il.add(4, a, b)
 
@@ -655,11 +684,12 @@ class OpRegisterIndirectIndex(Operand):
 
 
 class OpMemoryIndirect(Operand):
-    def __init__(self, size: int, reg: str, offset: int, outer_displacement: int):
+    def __init__(self, size: int, reg: str, offset: int, outer_displacement: int, pc_offset: int = 2):
         self.size = size
         self.reg = reg
         self.offset = offset
         self.outer_displacement = outer_displacement
+        self.pc_offset = pc_offset
 
     def __repr__(self):
         return "OpMemoryIndirect(%d, %s, %d, %d)" % (self.size, self.reg, self.offset, self.outer_displacement)
@@ -698,7 +728,7 @@ class OpMemoryIndirect(Operand):
         #     ),
         #     il.const(4, self.outer_displacement)
         # )
-        a = _base_register_il(il, self.reg)
+        a = _base_register_il(il, self.reg, self.pc_offset)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
         d = il.load(4, c)
@@ -720,7 +750,7 @@ class OpMemoryIndirect(Operand):
 
 
 class OpMemoryIndirectPostindex(Operand):
-    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int, pc_offset: int = 2):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -728,6 +758,7 @@ class OpMemoryIndirectPostindex(Operand):
         self.ireg_long = ireg_long
         self.scale = scale
         self.outer_displacement = outer_displacement
+        self.pc_offset = pc_offset
 
     def __repr__(self):
         return "OpMemoryIndirectPostindex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
@@ -779,7 +810,7 @@ class OpMemoryIndirectPostindex(Operand):
         #         h = il.const(4, self.outer_displacement)
         #     )
         # )
-        a = _base_register_il(il, self.reg)
+        a = _base_register_il(il, self.reg, self.pc_offset)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
         d = il.load(4, c)
@@ -806,7 +837,7 @@ class OpMemoryIndirectPostindex(Operand):
 
 
 class OpMemoryIndirectPreindex(Operand):
-    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int):
+    def __init__(self, size: int, reg: str, offset: int, ireg: str, ireg_long: bool, scale: int, outer_displacement: int, pc_offset: int = 2):
         self.size = size
         self.reg = reg
         self.offset = offset
@@ -814,6 +845,7 @@ class OpMemoryIndirectPreindex(Operand):
         self.ireg_long = ireg_long
         self.scale = scale
         self.outer_displacement = outer_displacement
+        self.pc_offset = pc_offset
 
     def __repr__(self):
         return "OpMemoryIndirectPreindex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
@@ -865,7 +897,7 @@ class OpMemoryIndirectPreindex(Operand):
         #     ),
         #     il.const(4, self.outer_displacement)
         # )
-        a = _base_register_il(il, self.reg)
+        a = _base_register_il(il, self.reg, self.pc_offset)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
 

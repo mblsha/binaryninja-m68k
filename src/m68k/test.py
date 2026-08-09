@@ -77,6 +77,33 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
             )
         return out
 
+    def _compose_ccr_expected() -> MockLLIL:
+        def flag_value(name: str, bit: int) -> MockLLIL:
+            value = mllil("ZX.b", [mllil("FLAG", [MockFlag(name)])])
+            if bit == 0:
+                return value
+            return mllil("LSL.b", [value, mllil("CONST.b", [bit])])
+
+        return mllil(
+            "OR.b",
+            [
+                mllil(
+                    "OR.b",
+                    [
+                        mllil(
+                            "OR.b",
+                            [
+                                mllil("OR.b", [flag_value("c", 0), flag_value("v", 1)]),
+                                flag_value("z", 2),
+                            ],
+                        ),
+                        flag_value("n", 3),
+                    ],
+                ),
+                flag_value("x", 4),
+            ],
+        )
+
     test_cases = [
         # moveq     #$0000,d0
         (
@@ -279,16 +306,28 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
         (
             b"\x02\x3c\x00\xfe",
             "andi.b    #$-2,ccr",
-            [mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [0])])],
+            _status_restore_expected(
+                "ccr",
+                mllil(
+                    "ZX.w",
+                    [mllil("AND.b", [_compose_ccr_expected(), mllil("CONST.b", [-2])])],
+                ),
+                "b",
+            ),
         ),
 
         # ori.b     #$1,ccr
         (
             b"\x00\x3c\x00\x01",
             "ori.b     #$1,ccr",
-            [
-                mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [1])]),
-            ],
+            _status_restore_expected(
+                "ccr",
+                mllil(
+                    "ZX.w",
+                    [mllil("OR.b", [_compose_ccr_expected(), mllil("CONST.b", [1])])],
+                ),
+                "b",
+            ),
         ),
 
         # scs.b     d1
@@ -348,9 +387,17 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
             "cas2.w    d0:d1,d2:d3,(a0):(a1)",
             [
                 mllil(
+                    "SET_REG.w",
+                    [mreg("TEMP0"), mllil("LOAD.w", [mllil("REG.d", [mreg("a0")])])],
+                ),
+                mllil(
+                    "SET_REG.w",
+                    [mreg("TEMP1"), mllil("LOAD.w", [mllil("REG.d", [mreg("a1")])])],
+                ),
+                mllil(
                     "SUB.w{nzvc}",
                     [
-                        mllil("LOAD.w", [mllil("REG.d", [mreg("a0")])]),
+                        mllil("REG.w", [mreg("TEMP0")]),
                         mllil("REG.w", [mreg("d0")]),
                     ],
                 ),
@@ -365,7 +412,7 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
                 mllil(
                     "SUB.w{nzvc}",
                     [
-                        mllil("LOAD.w", [mllil("REG.d", [mreg("a1")])]),
+                        mllil("REG.w", [mreg("TEMP1")]),
                         mllil("REG.w", [mreg("d1")]),
                     ],
                 ),
@@ -396,14 +443,14 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
                     "SET_REG.w",
                     [
                         mreg("d0"),
-                        mllil("LOAD.w", [mllil("REG.d", [mreg("a0")])]),
+                        mllil("REG.w", [mreg("TEMP0")]),
                     ],
                 ),
                 mllil(
                     "SET_REG.w",
                     [
                         mreg("d1"),
-                        mllil("LOAD.w", [mllil("REG.d", [mreg("a1")])]),
+                        mllil("REG.w", [mreg("TEMP1")]),
                     ],
                 ),
                 mllil("GOTO", [LabelRef("skip")]),

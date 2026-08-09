@@ -294,12 +294,267 @@ def test_status_writes_restore_each_condition_flag() -> None:
     assert masks == [1, 2, 4, 8, 16]
 
 
-def test_stop_updates_sr_and_terminates_the_block() -> None:
+def test_stop_updates_sr_and_keeps_the_interrupt_resume_path() -> None:
     nodes = _lift_to_llil(b"\x4e\x72\x27\x00")
 
     assert nodes[1].op == "SET_REG.w"
     assert getattr(nodes[1].ops[0], "name", None) == "sr"
-    assert nodes[-1].bare_op() == "NORET"
+    assert nodes[-1].bare_op() == "NOP"
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x10\x08", m68k_arch.M68000),  # MOVE.B A0,D0
+        (b"\x10\x40", m68k_arch.M68000),  # MOVEA.B D0,A0
+        (b"\x00\x08\x00\x00", m68k_arch.M68000),  # ORI.B #0,A0
+        (b"\x52\x08", m68k_arch.M68000),  # ADDQ.B #1,A0
+        (b"\x4e\x80", m68k_arch.M68000),  # JSR D0
+        (b"\x41\x00", m68k_arch.M68000),  # CHK.L on a 68000
+        (b"\x41\xc0", m68k_arch.M68020),  # reserved LEA D0,A0 encoding
+    ],
+)
+def test_decoder_rejects_illegal_effective_addresses(data: bytes, arch_cls: type) -> None:
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[:2] == ("unimplemented", 2)
+
+
+def test_decoder_handles_truncated_extension_words_without_exceptions() -> None:
+    cases = [
+        (m68k_arch.M68000, b"\x4e\x72\x27\x00"),
+        (m68k_arch.M68000, b"\x20\x39\x12\x34\x56\x78"),
+        (m68k_arch.M68020, b"\x60\xff\x00\x00\x00\x04"),
+        (m68k_arch.M68020, b"\x4c\xba\x00\x01\x00\x04"),
+    ]
+    for arch_cls, complete in cases:
+        decoder = arch_cls().disasm
+        for length in range(len(complete)):
+            result = decoder.decode_instruction(complete[:length], 0x1000)
+            assert result[0] == "unimplemented"
+            assert result[1] == min(length, 2)
+
+
+def test_extb_uses_its_real_opcode_and_addx_memory_uses_address_fields() -> None:
+    assert _disasm(b"\x49\xc0", arch_cls=m68k_arch.M68020) == "extb      d0"
+    assert _disasm(b"\xd1\x08") == "addx.b    -(a0),-(a0)"
+    assert _disasm(b"\x91\x08") == "subx.b    -(a0),-(a0)"
+
+    nodes = _lift_to_llil(b"\xd1\x08")
+    assert [node.bare_op() for node in nodes[:3]] == ["SET_REG", "SET_REG", "SET_REG"]
+    assert [getattr(node.ops[0], "name", None) for node in nodes[:3]] == ["a0", "TEMP100", "a0"]
+    assert nodes[1].ops[1].bare_op() == "LOAD"
+
+
+def test_pc_relative_ea_uses_its_own_extension_word_as_the_base() -> None:
+    data = b"\x4c\xba\x00\x01\x00\x04"  # MOVEM.W 4(PC),D0
+
+    assert _disasm(data, start_addr=0x1000, arch_cls=m68k_arch.M68020) == "movem.w   ($00001008),d0"
+    nodes = _lift_to_llil(data, start_addr=0x1000, arch_cls=m68k_arch.M68020)
+    assert nodes[0].ops[1].bare_op() == "CONST_PTR"
+    assert nodes[0].ops[1].ops[0] == 0x1008
+
+
+@pytest.mark.parametrize(
+    "data, logical_op",
+    [
+        (b"\x00\x7c\x20\x00", "OR"),
+        (b"\x02\x7c\xdf\xff", "AND"),
+        (b"\x0a\x7c\x20\x00", "XOR"),
+    ],
+)
+def test_immediate_logical_to_sr_updates_the_full_status_register(data: bytes, logical_op: str) -> None:
+    nodes = _lift_to_llil(data)
+
+    assert nodes[0].op == "SET_REG.w"
+    assert getattr(nodes[0].ops[0], "name", None) == "TEMP7"
+    assert nodes[0].ops[1].bare_op() == logical_op
+    assert nodes[0].ops[1].width() == 2
+    composed_status = nodes[0].ops[1].ops[0]
+    assert composed_status.bare_op() == "OR"
+    assert composed_status.ops[0].bare_op() == "AND"
+    assert composed_status.ops[0].ops[1].ops[0] == 0xffe0
+    assert composed_status.ops[1].bare_op() == "OR"
+    assert nodes[1].op == "SET_REG.w"
+    assert getattr(nodes[1].ops[0], "name", None) == "sr"
+    assert [getattr(node.ops[0], "name", None) for node in nodes[2:]] == ["c", "v", "z", "n", "x"]
+
+
+@pytest.mark.parametrize("data, operation", [(b"\x10\xd8", "STORE"), (b"\xb1\x08", "SUB")])
+def test_shared_postincrement_eas_are_evaluated_in_source_then_destination_order(
+    data: bytes, operation: str
+) -> None:
+    nodes = _lift_to_llil(data)
+
+    assert getattr(nodes[0].ops[0], "name", None) == "TEMP100"
+    assert nodes[0].ops[1].bare_op() == "LOAD"
+    assert getattr(nodes[1].ops[0], "name", None) == "a0"
+    assert nodes[2].bare_op() == operation
+    assert getattr(nodes[2].ops[-1].ops[0], "name", None) == "TEMP100"
+    assert getattr(nodes[3].ops[0], "name", None) == "a0"
+
+
+def test_68020_movem_stores_the_original_predecrement_base_value() -> None:
+    nodes = _lift_to_llil(b"\x48\xe0\x80\x80", arch_cls=m68k_arch.M68020)
+
+    base_store = nodes[2]
+    assert base_store.bare_op() == "STORE"
+    assert base_store.ops[0].bare_op() == "SUB"
+    assert base_store.ops[1].bare_op() == "SUB"
+    assert base_store.ops[0].ops[1].ops[0] == 4
+    assert base_store.ops[1].ops[1].ops[0] == 4
+
+
+def test_register_shift_counts_are_modulo_64_and_asl_has_distinct_overflow() -> None:
+    asl_nodes = _lift_to_llil(b"\xe1\x21")  # ASL.B D0,D1
+    lsl_nodes = _lift_to_llil(b"\xe1\x29")  # LSL.B D0,D1
+
+    for nodes in (asl_nodes, lsl_nodes):
+        masked_count = nodes[1].ops[1]
+        assert masked_count.bare_op() == "AND"
+        assert masked_count.width() == 4
+        assert masked_count.ops[1].ops[0] == 0x3f
+        assert nodes[2].ops[1].op == "LSL.b{nzvc}"
+        assert getattr(nodes[-2].ops[0], "name", None) == "x"
+        assert getattr(nodes[-1].ops[0], "name", None) == "v"
+
+    asl_overflow = asl_nodes[-1].ops[1]
+    assert asl_overflow.bare_op() == "CMP_NE"
+    assert asl_overflow.ops[0].bare_op() == "ASR"
+    assert lsl_nodes[-1].ops[1].bare_op() == "CONST"
+    assert lsl_nodes[-1].ops[1].ops[0] == 0
+
+    roxl_nodes = _lift_to_llil(b"\xe1\x30")  # ROXL.B D0,D0
+    assert roxl_nodes[0].op == "SET_REG.d"
+    assert getattr(roxl_nodes[0].ops[0], "name", None) == "TEMP4"
+    assert roxl_nodes[0].ops[1].bare_op() == "AND"
+    assert roxl_nodes[2].ops[1].ops[1].bare_op() == "REG"
+    assert getattr(roxl_nodes[2].ops[1].ops[1].ops[0], "name", None) == "TEMP4"
+
+
+def test_cas_snapshots_memory_before_the_compare_and_failure_paths() -> None:
+    nodes = _lift_to_llil(b"\x0c\xd0\x00\x40", arch_cls=m68k_arch.M68020)
+
+    assert nodes[0].op == "SET_REG.w"
+    assert getattr(nodes[0].ops[0], "name", None) == "TEMP0"
+    assert nodes[0].ops[1].bare_op() == "LOAD"
+    assert nodes[1].bare_op() == "SUB"
+    assert nodes[1].ops[0].bare_op() == "REG"
+    assert getattr(nodes[1].ops[0].ops[0], "name", None) == "TEMP0"
+    failure_write = next(
+        node
+        for node in nodes
+        if node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", "").startswith("d0")
+    )
+    assert failure_write.ops[1].bare_op() == "REG"
+    assert getattr(failure_write.ops[1].ops[0], "name", None) == "TEMP0"
+
+
+def test_long_division_snapshots_an_aliased_divisor_before_writing_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    division_calls: list[tuple[int, MockLLIL, MockLLIL, bool]] = []
+
+    def fake_division(
+        il: Any, size: int, dividend: MockLLIL, divisor: MockLLIL, signed: bool
+    ) -> tuple[MockLLIL, MockLLIL]:
+        division_calls.append((size, dividend, divisor, signed))
+        return il.const(size, 3), il.const(size, 1)
+
+    monkeypatch.setattr(m68k_arch.M68020, "_division_result_il", staticmethod(fake_division))
+    monkeypatch.setattr(
+        m68k_arch.M68020,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+
+    data = b"\x4c\x41\x00\x01"  # DIVUL D1,D1:D0
+    assert _disasm(data, arch_cls=m68k_arch.M68020) == "divul     d1,d1:d0"
+    nodes = _lift_to_llil(data, arch_cls=m68k_arch.M68020)
+
+    assert [getattr(node.ops[0], "name", None) for node in nodes[:2]] == ["TEMP0", "TEMP1"]
+    assert getattr(nodes[0].ops[1].ops[0], "name", None) == "d1"
+    assert getattr(nodes[1].ops[1].ops[0], "name", None) == "d0"
+    assert len(division_calls) == 1
+    size, dividend, divisor, signed = division_calls[0]
+    assert (size, signed) == (4, False)
+    assert getattr(dividend.ops[0], "name", None) == "TEMP1"
+    assert divisor.bare_op() == "ZX"
+    assert getattr(divisor.ops[0].ops[0], "name", None) == "TEMP0"
+
+    architectural_writes = [
+        getattr(node.ops[0], "name", "")
+        for node in nodes
+        if node.bare_op() == "SET_REG" and not getattr(node.ops[0], "name", "").startswith("TEMP")
+    ]
+    assert architectural_writes == ["d1", "d0"]
+    assert [getattr(node.ops[0], "name", None) for node in nodes[-5:-1]] == ["n", "z", "v", "c"]
+
+
+def test_wide_signed_division_checks_zero_and_32_bit_quotient_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    division_calls: list[tuple[int, bool]] = []
+
+    def fake_division(
+        il: Any, size: int, dividend: MockLLIL, divisor: MockLLIL, signed: bool
+    ) -> tuple[MockLLIL, MockLLIL]:
+        division_calls.append((size, signed))
+        return il.const(size, 3), il.const(size, 1)
+
+    monkeypatch.setattr(m68k_arch.M68020, "_division_result_il", staticmethod(fake_division))
+    monkeypatch.setattr(
+        m68k_arch.M68020,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+
+    nodes = _lift_to_llil(b"\x4c\x41\x0c\x01", arch_cls=m68k_arch.M68020)
+    conditions = [node.ops[0] for node in nodes if node.bare_op() == "IF"]
+
+    assert division_calls == [(8, True)]
+    assert conditions[0].bare_op() == "CMP_E"  # divisor == 0
+    assert conditions[1].bare_op() == "AND"  # INT64_MIN / -1
+    assert conditions[2].bare_op() == "OR"  # quotient outside signed 32-bit range
+    assert [operand.bare_op() for operand in conditions[2].ops] == ["CMP_SLT", "CMP_SGT"]
+    assert any(
+        node.bare_op() == "SET_FLAG"
+        and getattr(node.ops[0], "name", None) == "v"
+        and node.ops[1].ops[0] == 1
+        for node in nodes
+    )
+
+
+def test_chk_sets_n_to_identify_the_failed_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        m68k_arch.M68000,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+
+    nodes = _lift_to_llil(b"\x41\x90")  # CHK.W (A0),D0
+    n_writes = [
+        node
+        for node in nodes
+        if node.bare_op() == "SET_FLAG" and getattr(node.ops[0], "name", None) == "n"
+    ]
+
+    assert [node.ops[1].ops[0] for node in n_writes] == [1, 0]
+    assert any(node.bare_op() == "UNIMPL" for node in nodes)
+
+
+def test_newer_cpu_rte_does_not_assume_a_68000_exception_frame(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    nodes = _lift_to_llil(b"\x4e\x73", start_addr=0x1000, arch_cls=m68k_arch.M68020)
+
+    assert [node.bare_op() for node in nodes] == ["UNIMPL"]
+    assert caplog.messages == [
+        "M68020 LLIL at 0x1000: format-dependent RTE frame is not lifted; "
+        "emitting unimplemented instead of assuming a 68000 frame"
+    ]
 
 
 def test_decoder_enforces_cpu_generation_and_instruction_length() -> None:

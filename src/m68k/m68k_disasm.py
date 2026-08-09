@@ -455,6 +455,8 @@ class M68KDisasm:
                 if instruction & 0xf9ff == 0x08fc:
                     instr = 'cas2'
                     size = ((instruction >> 9) & 3) - 1
+                    if size == SIZE_BYTE:
+                        return error_value
                     extra1 = struct.unpack_from('>H', data, 2)[0]
                     extra2 = struct.unpack_from('>H', data, 4)[0]
                     if (extra1 | extra2) & 0x0e38:
@@ -494,6 +496,8 @@ class M68KDisasm:
                 size = (instruction >> 6) & 0x03
                 source, extra_source = self.decode_effective_address(7, 4, data[2:], size)
                 if instruction & 0x00ff == 0x003c:
+                    if data[2] != 0:
+                        return error_value
                     dest = OpRegisterDirect(size, 'ccr')
                     extra_dest = 0
                 elif instruction & 0x00ff == 0x007c:
@@ -514,6 +518,8 @@ class M68KDisasm:
                     length = 2+extra_source+extra_dest
             elif msb == 0x08:
                 # btst, bchg, bclr, bset with constant
+                if data[2] != 0:
+                    return error_value
                 if instruction & 0xffc0 == 0x0800:
                     instr = 'btst'
                 elif instruction & 0xffc0 == 0x0840:
@@ -613,19 +619,17 @@ class M68KDisasm:
                 size = SIZE_LONG
                 dest = OpRegisterDirect(size, Registers[instruction & 7])
                 skip_ea = True
-            elif instruction & 0xf100 == 0x4100:
-                # lea, extb, chk
-                if instruction & 0xf1c0 == 0x41c0:
-                    instr = 'lea'
-                    dest = OpRegisterDirect(SIZE_LONG, Registers[((instruction >> 9) & 7) + 8])
-                    size = SIZE_LONG
+            elif instruction & 0xf1c0 == 0x41c0:
+                instr = 'lea'
+                dest = OpRegisterDirect(SIZE_LONG, Registers[((instruction >> 9) & 7) + 8])
+                size = SIZE_LONG
+            elif instruction & 0xf140 == 0x4100:
+                instr = 'chk'
+                if instruction & 0x0080:
+                    size = SIZE_WORD
                 else:
-                    instr = 'chk'
-                    if instruction & 0x0080:
-                        size = SIZE_WORD
-                    else:
-                        size = SIZE_LONG
-                    dest = OpRegisterDirect(size, Registers[(instruction >> 9) & 7])
+                    size = SIZE_LONG
+                dest = OpRegisterDirect(size, Registers[(instruction >> 9) & 7])
             elif msb == 0x40:
                 # move from sr, negx
                 if instruction & 0xffc0 == 0x40c0:
@@ -1077,7 +1081,7 @@ class M68KDisasm:
                     else:
                         source = OpRegisterDirect(SIZE_BYTE, Registers[instruction & 7])
                         dest = OpRegisterDirect(SIZE_BYTE, Registers[(instruction >> 9) & 7])
-                else:
+                elif instruction & 0xf1f8 in (0xc140, 0xc148, 0xc188):
                     instr = 'exg'
                     size = SIZE_LONG
                     source = OpRegisterDirect(size, Registers[(instruction >> 9) & 7])
@@ -1087,6 +1091,8 @@ class M68KDisasm:
                         dest = OpRegisterDirect(size, Registers[(instruction & 7) + 8])
                     if instruction & 0xf1f8 == 0xc188:
                         dest = OpRegisterDirect(size, Registers[(instruction & 7) + 8])
+                else:
+                    return error_value
                 length = 2
             else:
                 instr = 'and'
@@ -1204,6 +1210,8 @@ class M68KDisasm:
         elif operation_code == 0xf:
             if instruction & 0xff20 == 0xf420:
                 if self.isa_level < 4:
+                    return error_value
+                if instruction & 0x0018 == 0:
                     return error_value
                 instr = 'cpush'
                 length = 2

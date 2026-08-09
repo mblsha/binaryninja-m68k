@@ -219,6 +219,10 @@ class M68000(Architecture):
     rts_pass_flags = False
     isa_level = 0
     cpu32 = False
+    # Only T1, S, I2-I0, and the condition codes exist on the original
+    # 68000/68010 status register.  Later processors add T0 and M.
+    sr_write_mask = 0xA71F
+    rte_frame_sizes = {}
 
     def __init__(self):
         Architecture.__init__(self)
@@ -249,7 +253,18 @@ class M68000(Architecture):
         # low byte for CCR and the individual condition-code flags below.
         il.append(il.set_reg(2, LLIL_TEMP(7), value))
         register_size = 2 if write_sr else 1
-        il.append(il.set_reg(register_size, register, il.reg(register_size, LLIL_TEMP(7))))
+        writable_mask = self.sr_write_mask if write_sr else 0x1f
+        il.append(
+            il.set_reg(
+                register_size,
+                register,
+                il.and_expr(
+                    register_size,
+                    il.reg(register_size, LLIL_TEMP(7)),
+                    il.const(register_size, writable_mask),
+                ),
+            )
+        )
 
         flag_masks = {'c': 0x01, 'v': 0x02, 'z': 0x04, 'n': 0x08, 'x': 0x10}
         for flag, mask in flag_masks.items():
@@ -564,11 +579,10 @@ class M68000(Architecture):
         length: int,
         signed: bool,
     ) -> None:
-        skip_label_found = True
-        skip = il.get_label_for_address(il.arch, il.current_address + length)
-        if skip is None:
-            skip = LowLevelILLabel()
-            skip_label_found = False
+        # Always join inside this instruction.  Jumping directly to an LLIL
+        # label already registered for the next instruction would bypass EA
+        # postincrement nodes appended by get_instruction_low_level_il.
+        skip = LowLevelILLabel()
 
         check_overflow = LowLevelILLabel()
         divide = LowLevelILLabel()
@@ -663,8 +677,7 @@ class M68000(Architecture):
         il.append(il.set_flag('c', il.const(1, 0)))
         il.append(il.goto(skip))
 
-        if not skip_label_found:
-            il.mark_label(skip)
+        il.mark_label(skip)
 
     def _lift_long_division(
         self,
@@ -675,11 +688,7 @@ class M68000(Architecture):
         signed: bool,
         wide_dividend: bool,
     ) -> None:
-        skip_label_found = True
-        skip = il.get_label_for_address(il.arch, il.current_address + length)
-        if skip is None:
-            skip = LowLevelILLabel()
-            skip_label_found = False
+        skip = LowLevelILLabel()
 
         check_overflow = LowLevelILLabel()
         divide = LowLevelILLabel()
@@ -782,8 +791,7 @@ class M68000(Architecture):
         il.append(il.set_flag('c', il.const(1, 0)))
         il.append(il.goto(skip))
 
-        if not skip_label_found:
-            il.mark_label(skip)
+        il.mark_label(skip)
 
     def _lift_bound_check(
         self,
@@ -838,18 +846,651 @@ class M68000(Architecture):
         if not trap_on_failure:
             return
 
-        skip_label_found = True
-        skip = il.get_label_for_address(il.arch, il.current_address + length)
-        if skip is None:
-            skip = LowLevelILLabel()
-            skip_label_found = False
+        skip = LowLevelILLabel()
         trap = LowLevelILLabel()
         il.append(il.if_expr(out_of_bounds, trap, skip))
         il.mark_label(trap)
         il.append(il.system_call())
         il.append(il.goto(skip))
-        if not skip_label_found:
-            il.mark_label(skip)
+        il.mark_label(skip)
+
+    @staticmethod
+    def _bitfield_parameter_il(
+        il: LowLevelILFunction, value, *, width: bool
+    ) -> ExpressionIndex:
+        if isinstance(value, str):
+            raw = il.and_expr(4, il.reg(4, value), il.const(4, 0x1f)) if width else il.reg(4, value)
+        else:
+            raw = il.const(4, value)
+        if not width or not isinstance(value, str):
+            return raw
+        # A register width is modulo 32, with zero denoting 32.
+        return il.add(
+            4,
+            raw,
+            il.shift_left(
+                4,
+                M68000._extend_il(
+                    il,
+                    4,
+                    il.compare_equal(4, raw, il.const(4, 0)),
+                    signed=False,
+                ),
+                il.const(1, 5),
+            ),
+        )
+
+    @staticmethod
+    def _bitfield_mask_il(il: LowLevelILFunction, width: ExpressionIndex) -> ExpressionIndex:
+        # (1 << width) - 1 without overflowing when width is 32.
+        shift = il.and_expr(4, il.sub(4, il.const(4, 32), width), il.const(4, 31))
+        return il.logical_shift_right(4, il.const(4, 0xffffffff), shift)
+
+    def _read_bitfield_il(
+        self, il: LowLevelILFunction, bitfield: OpBitField
+    ) -> Tuple[ExpressionIndex, bool]:
+        offset = self._bitfield_parameter_il(il, bitfield.offset, width=False)
+        width = self._bitfield_parameter_il(il, bitfield.width, width=True)
+        il.append(il.set_reg(4, LLIL_TEMP(20), offset))
+        il.append(il.set_reg(4, LLIL_TEMP(21), width))
+
+        if isinstance(bitfield.operand, OpRegisterDirect):
+            il.append(il.set_reg(4, LLIL_TEMP(25), bitfield.operand.get_source_il(il)))
+            rotate_count = il.and_expr(4, il.reg(4, LLIL_TEMP(20)), il.const(4, 31))
+            il.append(
+                il.set_reg(
+                    4,
+                    LLIL_TEMP(28),
+                    il.rotate_left(4, il.reg(4, LLIL_TEMP(25)), rotate_count),
+                )
+            )
+            il.append(
+                il.set_reg(
+                    4,
+                    LLIL_TEMP(26),
+                    il.sub(4, il.const(4, 32), il.reg(4, LLIL_TEMP(21))),
+                )
+            )
+            il.append(
+                il.set_reg(
+                    4,
+                    LLIL_TEMP(27),
+                    self._bitfield_mask_il(il, il.reg(4, LLIL_TEMP(21))),
+                )
+            )
+            il.append(
+                il.set_reg(
+                    4,
+                    LLIL_TEMP(29),
+                    il.and_expr(
+                        4,
+                        il.logical_shift_right(
+                            4,
+                            il.reg(4, LLIL_TEMP(28)),
+                            il.reg(4, LLIL_TEMP(26)),
+                        ),
+                        il.reg(4, LLIL_TEMP(27)),
+                    ),
+                )
+            )
+            return il.reg(4, LLIL_TEMP(29)), True
+
+        byte_offset = il.expr(
+            LowLevelILOperation.LLIL_ASR,
+            il.reg(4, LLIL_TEMP(20)),
+            il.const(1, 3),
+            size=4,
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(22),
+                il.add(4, bitfield.operand.get_address_il(il), byte_offset),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(23),
+                il.and_expr(4, il.reg(4, LLIL_TEMP(20)), il.const(4, 7)),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(24),
+                il.logical_shift_right(
+                    4,
+                    il.add(
+                        4,
+                        il.add(
+                            4,
+                            il.reg(4, LLIL_TEMP(23)),
+                            il.reg(4, LLIL_TEMP(21)),
+                        ),
+                        il.const(4, 7),
+                    ),
+                    il.const(1, 3),
+                ),
+            )
+        )
+        il.append(il.set_reg(8, LLIL_TEMP(25), il.const(8, 0)))
+
+        loaded = LowLevelILLabel()
+        next_byte = None
+        for index in range(5):
+            if next_byte is not None:
+                il.mark_label(next_byte)
+            byte = self._extend_il(
+                il,
+                8,
+                il.load(
+                    1,
+                    il.add(4, il.reg(4, LLIL_TEMP(22)), il.const(4, index)),
+                ),
+                signed=False,
+            )
+            shift = (4 - index) * 8
+            if shift:
+                byte = il.shift_left(8, byte, il.const(1, shift))
+            il.append(
+                il.set_reg(
+                    8,
+                    LLIL_TEMP(25),
+                    il.or_expr(8, il.reg(8, LLIL_TEMP(25)), byte),
+                )
+            )
+            if index != 4:
+                next_byte = LowLevelILLabel()
+                il.append(
+                    il.if_expr(
+                        il.compare_unsigned_greater_than(
+                            4, il.reg(4, LLIL_TEMP(24)), il.const(4, index + 1)
+                        ),
+                        next_byte,
+                        loaded,
+                    )
+                )
+        il.mark_label(loaded)
+
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(26),
+                il.sub(
+                    4,
+                    il.sub(4, il.const(4, 40), il.reg(4, LLIL_TEMP(23))),
+                    il.reg(4, LLIL_TEMP(21)),
+                ),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(27),
+                self._bitfield_mask_il(il, il.reg(4, LLIL_TEMP(21))),
+            )
+        )
+        il.append(
+            il.set_reg(
+                8,
+                LLIL_TEMP(28),
+                il.logical_shift_right(
+                    8,
+                    il.reg(8, LLIL_TEMP(25)),
+                    il.reg(4, LLIL_TEMP(26)),
+                ),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(29),
+                il.and_expr(
+                    4,
+                    il.reg(4, LLIL_TEMP(28)),
+                    il.reg(4, LLIL_TEMP(27)),
+                ),
+            )
+        )
+        return il.reg(4, LLIL_TEMP(29)), False
+
+    def _write_bitfield_il(
+        self,
+        il: LowLevelILFunction,
+        bitfield: OpBitField,
+        value: ExpressionIndex,
+        register_operand: bool,
+    ) -> None:
+        value = il.and_expr(4, value, il.reg(4, LLIL_TEMP(27)))
+        if register_operand:
+            field_mask = il.shift_left(
+                4, il.reg(4, LLIL_TEMP(27)), il.reg(4, LLIL_TEMP(26))
+            )
+            rotated = il.or_expr(
+                4,
+                il.and_expr(
+                    4,
+                    il.reg(4, LLIL_TEMP(28)),
+                    il.xor_expr(4, field_mask, il.const(4, 0xffffffff)),
+                ),
+                il.shift_left(4, value, il.reg(4, LLIL_TEMP(26))),
+            )
+            rotate_count = il.and_expr(4, il.reg(4, LLIL_TEMP(20)), il.const(4, 31))
+            il.append(
+                bitfield.operand.get_dest_il(
+                    il, il.rotate_right(4, rotated, rotate_count)
+                )
+            )
+            return
+
+        field_mask = il.shift_left(
+            8,
+            self._extend_il(il, 8, il.reg(4, LLIL_TEMP(27)), signed=False),
+            il.reg(4, LLIL_TEMP(26)),
+        )
+        new_window = il.or_expr(
+            8,
+            il.and_expr(
+                8,
+                il.reg(8, LLIL_TEMP(25)),
+                il.xor_expr(8, field_mask, il.const(8, 0xffffffffffffffff)),
+            ),
+            il.shift_left(
+                8,
+                self._extend_il(il, 8, value, signed=False),
+                il.reg(4, LLIL_TEMP(26)),
+            ),
+        )
+        il.append(il.set_reg(8, LLIL_TEMP(30), new_window))
+
+        stored = LowLevelILLabel()
+        next_byte = None
+        for index in range(5):
+            if next_byte is not None:
+                il.mark_label(next_byte)
+            shift = (4 - index) * 8
+            byte = il.reg(8, LLIL_TEMP(30))
+            if shift:
+                byte = il.logical_shift_right(8, byte, il.const(1, shift))
+            il.append(il.set_reg(8, LLIL_TEMP(31), byte))
+            il.append(
+                il.store(
+                    1,
+                    il.add(4, il.reg(4, LLIL_TEMP(22)), il.const(4, index)),
+                    il.reg(1, LLIL_TEMP(31)),
+                )
+            )
+            if index != 4:
+                next_byte = LowLevelILLabel()
+                il.append(
+                    il.if_expr(
+                        il.compare_unsigned_greater_than(
+                            4, il.reg(4, LLIL_TEMP(24)), il.const(4, index + 1)
+                        ),
+                        next_byte,
+                        stored,
+                    )
+                )
+        il.mark_label(stored)
+
+    @staticmethod
+    def _count_leading_zeros_il(
+        il: LowLevelILFunction, value: ExpressionIndex
+    ) -> ExpressionIndex:
+        count = il.const(4, 0)
+        for bit in range(1, 33):
+            below_power_of_two = il.compare_unsigned_greater_than(
+                4, il.const(4, (1 << bit) - 1), value
+            )
+            count = il.add(
+                4,
+                count,
+                M68000._extend_il(il, 4, below_power_of_two, signed=False),
+            )
+        return count
+
+    def _write_bitfield_flags_il(
+        self, il: LowLevelILFunction, value: ExpressionIndex
+    ) -> None:
+        most_significant_bit = il.and_expr(
+            4,
+            il.logical_shift_right(
+                4,
+                value,
+                il.sub(4, il.reg(4, LLIL_TEMP(21)), il.const(4, 1)),
+            ),
+            il.const(4, 1),
+        )
+        il.append(
+            il.set_flag(
+                'n',
+                il.compare_not_equal(4, most_significant_bit, il.const(4, 0)),
+            )
+        )
+        il.append(il.set_flag('z', il.compare_equal(4, value, il.const(4, 0))))
+        il.append(il.set_flag('v', il.const(1, 0)))
+        il.append(il.set_flag('c', il.const(1, 0)))
+
+    def _lift_bitfield(
+        self,
+        il: LowLevelILFunction,
+        instr: str,
+        source: Optional[Operand],
+        dest: Optional[Operand],
+    ) -> None:
+        bitfield = source if isinstance(source, OpBitField) else dest
+        if not isinstance(bitfield, OpBitField):
+            il.append(il.unimplemented())
+            return
+        field, register_operand = self._read_bitfield_il(il, bitfield)
+
+        flag_value = field
+        if instr == 'bfins':
+            inserted = il.and_expr(4, source.get_source_il(il), il.reg(4, LLIL_TEMP(27)))
+            il.append(il.set_reg(4, LLIL_TEMP(32), inserted))
+            flag_value = il.reg(4, LLIL_TEMP(32))
+        self._write_bitfield_flags_il(il, flag_value)
+
+        if instr == 'bfextu':
+            il.append(dest.get_dest_il(il, field))
+        elif instr == 'bfexts':
+            sign = il.shift_left(
+                4,
+                il.const(4, 1),
+                il.sub(4, il.reg(4, LLIL_TEMP(21)), il.const(4, 1)),
+            )
+            il.append(dest.get_dest_il(il, il.sub(4, il.xor_expr(4, field, sign), sign)))
+        elif instr == 'bfffo':
+            leading = il.sub(
+                4,
+                self._count_leading_zeros_il(il, field),
+                il.sub(4, il.const(4, 32), il.reg(4, LLIL_TEMP(21))),
+            )
+            il.append(
+                dest.get_dest_il(
+                    il, il.add(4, il.reg(4, LLIL_TEMP(20)), leading)
+                )
+            )
+        elif instr == 'bfchg':
+            self._write_bitfield_il(
+                il,
+                bitfield,
+                il.xor_expr(4, field, il.reg(4, LLIL_TEMP(27))),
+                register_operand,
+            )
+        elif instr == 'bfclr':
+            self._write_bitfield_il(il, bitfield, il.const(4, 0), register_operand)
+        elif instr == 'bfset':
+            self._write_bitfield_il(
+                il, bitfield, il.reg(4, LLIL_TEMP(27)), register_operand
+            )
+        elif instr == 'bfins':
+            self._write_bitfield_il(
+                il, bitfield, il.reg(4, LLIL_TEMP(32)), register_operand
+            )
+
+    def _lift_movep(
+        self, il: LowLevelILFunction, source: Operand, dest: Operand
+    ) -> None:
+        register = source if isinstance(source, OpRegisterDirect) else dest
+        memory = dest if isinstance(source, OpRegisterDirect) else source
+        size_bytes = 1 << register.size
+        il.append(il.set_reg(4, LLIL_TEMP(20), memory.get_address_il(il)))
+
+        if memory is source:
+            value = il.const(size_bytes, 0)
+            for index in range(size_bytes):
+                byte = self._extend_il(
+                    il,
+                    size_bytes,
+                    il.load(
+                        1,
+                        il.add(
+                            4,
+                            il.reg(4, LLIL_TEMP(20)),
+                            il.const(4, index * 2),
+                        ),
+                    ),
+                    signed=False,
+                )
+                shift = (size_bytes - index - 1) * 8
+                if shift:
+                    byte = il.shift_left(size_bytes, byte, il.const(1, shift))
+                value = il.or_expr(size_bytes, value, byte)
+            il.append(register.get_dest_il(il, value))
+            return
+
+        il.append(il.set_reg(size_bytes, LLIL_TEMP(21), register.get_source_il(il)))
+        for index in range(size_bytes):
+            shift = (size_bytes - index - 1) * 8
+            byte = il.reg(size_bytes, LLIL_TEMP(21))
+            if shift:
+                byte = il.logical_shift_right(size_bytes, byte, il.const(1, shift))
+            il.append(il.set_reg(size_bytes, LLIL_TEMP(22), byte))
+            il.append(
+                il.store(
+                    1,
+                    il.add(
+                        4,
+                        il.reg(4, LLIL_TEMP(20)),
+                        il.const(4, index * 2),
+                    ),
+                    il.reg(1, LLIL_TEMP(22)),
+                )
+            )
+
+    def _lift_moves(
+        self,
+        il: LowLevelILFunction,
+        size_bytes: int,
+        source: Operand,
+        dest: Operand,
+    ) -> None:
+        memory_to_register = isinstance(dest, OpRegisterDirect)
+        function_code = 'sfc' if memory_to_register else 'dfc'
+        log_debug(
+            f"{self.name} LLIL at 0x{il.current_address:x}: moves{SizeSuffix[source.size]} "
+            f"uses {function_code.upper()}; alternate address-space selection is represented "
+            "in Binary Ninja's flat LLIL memory"
+        )
+        if memory_to_register and (dest.reg.startswith('a') or dest.reg == 'sp'):
+            il.append(
+                il.set_reg(
+                    4,
+                    dest.reg,
+                    self._extend_il(il, 4, source.get_source_il(il), signed=True),
+                )
+            )
+        else:
+            il.append(dest.get_dest_il(il, source.get_source_il(il)))
+
+    def _lift_rte(self, il: LowLevelILFunction) -> None:
+        process_frame = LowLevelILLabel()
+        il.mark_label(process_frame)
+        il.append(il.set_reg(4, LLIL_TEMP(40), il.reg(4, 'sp')))
+        il.append(
+            il.set_reg(2, LLIL_TEMP(41), il.load(2, il.reg(4, LLIL_TEMP(40))))
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(42),
+                il.load(
+                    4,
+                    il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 2)),
+                ),
+            )
+        )
+        format_word = il.load(
+            2, il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 6))
+        )
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(43),
+                il.logical_shift_right(2, format_word, il.const(1, 12)),
+            )
+        )
+
+        restore = LowLevelILLabel()
+        check = None
+        for frame_format, frame_size in self.rte_frame_sizes.items():
+            if check is not None:
+                il.mark_label(check)
+            matched = LowLevelILLabel()
+            check = LowLevelILLabel()
+            il.append(
+                il.if_expr(
+                    il.compare_equal(
+                        2,
+                        il.reg(2, LLIL_TEMP(43)),
+                        il.const(2, frame_format),
+                    ),
+                    matched,
+                    check,
+                )
+            )
+            il.mark_label(matched)
+            if frame_format == 0x1:
+                # Format $1 is a throwaway frame.  It restores SR, discards
+                # itself, and restarts RTE processing on the newly active
+                # supervisor stack instead of using its saved PC.
+                il.append(
+                    il.set_reg(
+                        4,
+                        'sp',
+                        il.add(
+                            4,
+                            il.reg(4, LLIL_TEMP(40)),
+                            il.const(4, frame_size),
+                        ),
+                    )
+                )
+                self._write_status_register_il(
+                    il, il.reg(2, LLIL_TEMP(41)), write_sr=True
+                )
+                il.append(il.goto(process_frame))
+            else:
+                il.append(il.set_reg(4, LLIL_TEMP(44), il.const(4, frame_size)))
+                il.append(il.goto(restore))
+        if check is not None:
+            il.mark_label(check)
+        # An invalid frame causes a format exception and cannot fall through.
+        il.append(il.no_ret())
+
+        il.mark_label(restore)
+        il.append(
+            il.set_reg(
+                4,
+                'sp',
+                il.add(
+                    4,
+                    il.reg(4, LLIL_TEMP(40)),
+                    il.reg(4, LLIL_TEMP(44)),
+                ),
+            )
+        )
+        self._write_status_register_il(il, il.reg(2, LLIL_TEMP(41)), write_sr=True)
+        il.append(il.ret(il.reg(4, LLIL_TEMP(42))))
+
+    def _lift_rtm(self, il: LowLevelILFunction, dest: OpRegisterDirect) -> None:
+        log_debug(
+            f"{self.name} LLIL at 0x{il.current_address:x}: RTM restores the architectural "
+            "module frame; external access-level validation is not represented in LLIL"
+        )
+        il.append(il.set_reg(4, LLIL_TEMP(40), il.reg(4, 'sp')))
+        il.append(
+            il.set_reg(2, LLIL_TEMP(41), il.load(2, il.reg(4, LLIL_TEMP(40))))
+        )
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(42),
+                il.load(
+                    2,
+                    il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 4)),
+                ),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(43),
+                il.load(
+                    4,
+                    il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 0xc)),
+                ),
+            )
+        )
+        il.append(
+            il.set_reg(
+                4,
+                dest.reg,
+                il.load(
+                    4,
+                    il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 0x10)),
+                ),
+            )
+        )
+
+        use_saved_sp = LowLevelILLabel()
+        use_current_sp = LowLevelILLabel()
+        restore = LowLevelILLabel()
+        type_one = il.compare_equal(
+            2,
+            il.and_expr(2, il.reg(2, LLIL_TEMP(41)), il.const(2, 0x1f00)),
+            il.const(2, 0x0100),
+        )
+        indirect_arguments = il.compare_equal(
+            2,
+            il.and_expr(2, il.reg(2, LLIL_TEMP(41)), il.const(2, 0xe000)),
+            il.const(2, 0x8000),
+        )
+        il.append(il.if_expr(il.or_expr(1, type_one, indirect_arguments), use_saved_sp, use_current_sp))
+        argument_count = self._extend_il(
+            il, 4, il.reg(2, LLIL_TEMP(42)), signed=False
+        )
+
+        il.mark_label(use_saved_sp)
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(44),
+                il.add(
+                    4,
+                    il.load(
+                        4,
+                        il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 0x14)),
+                    ),
+                    argument_count,
+                ),
+            )
+        )
+        il.append(il.goto(restore))
+
+        il.mark_label(use_current_sp)
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(44),
+                il.add(
+                    4,
+                    il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 0x18)),
+                    argument_count,
+                ),
+            )
+        )
+        il.append(il.goto(restore))
+
+        il.mark_label(restore)
+        il.append(il.set_reg(4, 'sp', il.reg(4, LLIL_TEMP(44))))
+        self._write_status_register_il(
+            il,
+            il.load(2, il.add(4, il.reg(4, LLIL_TEMP(40)), il.const(4, 2))),
+            write_sr=False,
+        )
+        il.append(il.ret(il.reg(4, LLIL_TEMP(43))))
 
     def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: Optional[Operand], dest: Optional[Operand], third: Optional[Operand]):
         size_bytes = None
@@ -871,6 +1512,10 @@ class M68000(Architecture):
                         flags
                     )
                 )
+        elif instr == 'movep':
+            self._lift_movep(il, source, dest)
+        elif instr == 'moves':
+            self._lift_moves(il, size_bytes, source, dest)
         elif instr == 'movea':
             value = source.get_source_il(il)
             if source.size == SIZE_WORD:
@@ -1183,13 +1828,7 @@ class M68000(Architecture):
         elif instr == 'divul':
             self._lift_long_division(il, source, dest, length, signed=False, wide_dividend=False)
         elif instr == 'cas':
-            skip_label_found = True
-
-            skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-            if skip is None:
-                skip = LowLevelILLabel()
-                skip_label_found = False
+            skip = LowLevelILLabel()
 
             il.append(il.set_reg(size_bytes, LLIL_TEMP(0), third.get_source_il(il)))
             il.append(
@@ -1227,16 +1866,9 @@ class M68000(Architecture):
                 )
             )
 
-            if not skip_label_found:
-                il.mark_label(skip)
+            il.mark_label(skip)
         elif instr == 'cas2':
-            skip_label_found = True
-
-            skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-            if skip is None:
-                skip = LowLevelILLabel()
-                skip_label_found = False
+            skip = LowLevelILLabel()
 
             source_text = "".join(token.text for token in source.format(il.current_address))
             dest_text = "".join(token.text for token in dest.format(il.current_address))
@@ -1305,16 +1937,9 @@ class M68000(Architecture):
                 il.goto(skip)
             )
 
-            if not skip_label_found:
-                il.mark_label(skip)
+            il.mark_label(skip)
         elif instr == 'chk':
-            skip_label_found = True
-
-            skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-            if skip is None:
-                skip = LowLevelILLabel()
-                skip_label_found = False
+            skip = LowLevelILLabel()
 
             negative = LowLevelILLabel()
             above_bound = LowLevelILLabel()
@@ -1361,8 +1986,7 @@ class M68000(Architecture):
                 il.goto(skip)
             )
 
-            if not skip_label_found:
-                il.mark_label(skip)
+            il.mark_label(skip)
         elif instr == 'chk2':
             self._lift_bound_check(il, source, dest, size_bytes, length, trap_on_failure=True)
         elif instr in ('bchg', 'bclr', 'bset', 'btst'):
@@ -1408,6 +2032,8 @@ class M68000(Architecture):
 
             if result is not None:
                 il.append(dest.get_dest_il(il, result))
+        elif instr in ('bfchg', 'bfclr', 'bfexts', 'bfextu', 'bfffo', 'bfins', 'bfset', 'bftst'):
+            self._lift_bitfield(il, instr, source, dest)
         elif instr in ('asl', 'lsl', 'asr', 'lsr'):
             self._lift_shift(il, instr, size_bytes, source, dest)
         elif instr == 'rol':
@@ -1739,6 +2365,7 @@ class M68000(Architecture):
             )
         elif instr in ('jmp', 'bra'):
             tmpil = LowLevelILFunction(il.arch)
+            tmpil.current_address = il.current_address
             _dest_il = dest.get_address_il2(tmpil)
             dest_il = _dest_il[0]
             for i in _dest_il[1]:
@@ -1772,16 +2399,41 @@ class M68000(Architecture):
             if self.rts_pass_flags:
                 il.append(il.set_flag('c', il.reg(1, 'rc')))
         elif instr == 'callm':
-            # TODO
-            il.append(il.unimplemented())
+            descriptor_text = "".join(token.text for token in dest.format(il.current_address))
+            log_debug(
+                f"{self.name} LLIL at 0x{il.current_address:x}: CALLM #{source.value},"
+                f"{descriptor_text} resolves the descriptor entry point; module-stack and "
+                "external access-level changes are represented by call side effects"
+            )
+            il.append(il.set_reg(4, LLIL_TEMP(40), dest.get_address_il(il)))
+            il.append(
+                il.call(
+                    il.add(
+                        4,
+                        il.load(
+                            4,
+                            il.add(
+                                4,
+                                il.reg(4, LLIL_TEMP(40)),
+                                il.const(4, 4),
+                            ),
+                        ),
+                        il.const(4, 2),
+                    )
+                )
+            )
         elif instr == 'cpush':
-            # TODO
-            il.append(il.unimplemented())
+            log_debug(
+                f"{self.name} LLIL at 0x{il.current_address:x}: CPUSH cache state has no "
+                "architectural value-level LLIL effect"
+            )
+            il.append(il.nop())
         elif instr in ('bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
                     'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'):
             flag_cond = ConditionMapping[instr[1:]]
 
             tmpil = LowLevelILFunction(il.arch)
+            tmpil.current_address = il.current_address
             _dest_il = dest.get_address_il2(tmpil)
             dest_il = _dest_il[0]
             for i in _dest_il[1]:
@@ -1821,6 +2473,7 @@ class M68000(Architecture):
                     'dbgt', 'dble'):
             flag_cond = ConditionMapping.get(instr[2:], None)
             tmpil = LowLevelILFunction(il.arch)
+            tmpil.current_address = il.current_address
             _dest_il = dest.get_address_il2(tmpil)
             dest_il = _dest_il[0]
             for i in _dest_il[1]:
@@ -1909,13 +2562,7 @@ class M68000(Architecture):
             if cond_il is None:
                 il.append(il.unimplemented())
             else:
-                skip_label_found = True
-
-                skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-                if skip is None:
-                    skip = LowLevelILLabel()
-                    skip_label_found = False
+                skip = LowLevelILLabel()
 
                 set_dest = LowLevelILLabel()
                 clear_dest = LowLevelILLabel()
@@ -1944,8 +2591,7 @@ class M68000(Architecture):
                     il.goto(skip)
                 )
 
-                if not skip_label_found:
-                    il.mark_label(skip)
+                il.mark_label(skip)
         elif instr == 'rtd':
             il.append(
                 il.set_reg(4,
@@ -1975,14 +2621,9 @@ class M68000(Architecture):
                     )
                 )
             else:
-                log_debug(
-                    f"{self.name} LLIL at 0x{il.current_address:x}: format-dependent RTE frame "
-                    "is not lifted; emitting unimplemented instead of assuming a 68000 frame"
-                )
-                il.append(il.unimplemented())
+                self._lift_rte(il)
         elif instr == 'rtm':
-            # TODO
-            il.append(il.unimplemented())
+            self._lift_rtm(il, dest)
         elif instr == 'rtr':
             self._write_status_register_il(il, il.pop(2), write_sr=False)
             il.append(
@@ -2064,8 +2705,10 @@ class M68000(Architecture):
         result = InstructionInfo()
         result.length = length
 
-        if instr in ('rtd', 'rte', 'rtr', 'rts'):
+        if instr in ('rtd', 'rte', 'rtm', 'rtr', 'rts'):
             result.add_branch(BranchType.FunctionReturn)
+        elif instr == 'callm':
+            result.add_branch(BranchType.CallDestination)
         elif instr in ('jmp', 'jsr',
                     'bra', 'bsr', 'bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq',
                     'bvc', 'bvs', 'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble',
@@ -2147,6 +2790,27 @@ class M68000(Architecture):
             self.generate_instruction_il(il, instr, length, size, source, dest, third)
 
         elif instr is not None:
+
+            if instr in ('chk', 'divs', 'divu', 'divsl', 'divul') and isinstance(
+                source, OpRegisterIndirectPostincrement
+            ):
+                # These instructions may trap after reading the source.  The
+                # architectural postincrement has already occurred when the
+                # exception is taken, so capture the value and update An before
+                # emitting their internal control flow.
+                source_size = 1 << source.size
+                il.append(il.set_reg(source_size, LLIL_TEMP(100), source.get_source_il(il)))
+                il.append(source.get_post_il(il))
+                self.generate_instruction_il(
+                    il,
+                    instr,
+                    length,
+                    size,
+                    OpResolvedValue(source.size, 100),
+                    dest,
+                    third,
+                )
+                return length
 
             if self._requires_ordered_ea_evaluation(source, dest):
                 pre_il = source.get_pre_il(il)
@@ -2394,6 +3058,7 @@ class M68008(M68000):
 class M68010(M68000):
     name = "M68010"
     isa_level = 1
+    rte_frame_sizes = {0x0: 8, 0x8: 58}
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -2407,6 +3072,8 @@ class M68010(M68000):
 class M68020(M68010):
     name = "M68020"
     isa_level = 2
+    sr_write_mask = 0xF71F
+    rte_frame_sizes = {0x0: 8, 0x1: 8, 0x2: 12, 0x9: 20, 0xA: 32, 0xB: 92}
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -2437,6 +3104,7 @@ class M68030(M68020):
 class M68040(M68030):
     name = "M68040"
     isa_level = 4
+    rte_frame_sizes = {0x0: 8, 0x1: 8, 0x2: 12, 0x3: 12, 0x4: 16, 0x7: 60}
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -2483,6 +3151,8 @@ class M68EC040(M68040):
 class M68330(M68010):
     name = "M68330"
     cpu32 = True
+    sr_write_mask = 0xE71F
+    rte_frame_sizes = {0x0: 8, 0x1: 8, 0x2: 12, 0xC: 24}
     movem_store_decremented = True
     # AKA CPU32
 

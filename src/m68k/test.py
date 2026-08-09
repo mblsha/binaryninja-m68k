@@ -49,11 +49,21 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
         return out
 
     def _status_restore_expected(register: str, value: MockLLIL, size_suffix: str) -> list[MockLLIL]:
+        writable_mask = 0xA71F if register == "sr" else 0x1f
         out = [
             mllil("SET_REG.w", [mreg("TEMP7"), value]),
             mllil(
                 f"SET_REG.{size_suffix}",
-                [mreg(register), mllil(f"REG.{size_suffix}", [mreg("TEMP7")])],
+                [
+                    mreg(register),
+                    mllil(
+                        f"AND.{size_suffix}",
+                        [
+                            mllil(f"REG.{size_suffix}", [mreg("TEMP7")]),
+                            mllil(f"CONST.{size_suffix}", [writable_mask]),
+                        ],
+                    ),
+                ],
             ),
         ]
         for flag, mask in (("c", 1), ("v", 2), ("z", 4), ("n", 8), ("x", 16)):

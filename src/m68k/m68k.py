@@ -365,6 +365,23 @@ class M68000(Architecture):
         return il.system_call()
 
     @staticmethod
+    def _write_multiply_flags(
+        il: LowLevelILFunction,
+        size: int,
+        result: ExpressionIndex,
+        overflow: ExpressionIndex,
+    ) -> None:
+        il.append(
+            il.set_flag(
+                'n',
+                il.compare_signed_less_than(size, result, il.const(size, 0)),
+            )
+        )
+        il.append(il.set_flag('z', il.compare_equal(size, result, il.const(size, 0))))
+        il.append(il.set_flag('v', overflow))
+        il.append(il.set_flag('c', il.const(1, 0)))
+
+    @staticmethod
     def _division_result_il(
         il: LowLevelILFunction,
         size: int,
@@ -908,37 +925,70 @@ class M68000(Architecture):
             )
         elif instr in ('muls', 'mulu'):
             signed = instr == 'muls'
-            if isinstance(dest, OpRegisterDirectPair):
-                source_text = "".join(token.text for token in source.format(il.current_address))
-                dest_text = "".join(token.text for token in dest.format(il.current_address))
-                log_debug(
-                    f"{self.name} LLIL at 0x{il.current_address:x}: provisional {instr} register-pair lift "
-                    f"(source={source_text}, destination={dest_text}); 64-bit result semantics need verification"
-                )
-                il.append(
-                    il.set_reg_split(4,
-                        dest.reg1,
-                        dest.reg2,
-                        il.mult(8,
-                            self._extend_il(il, 8, source.get_source_il(il), signed=signed),
-                            self._extend_il(il, 8, il.reg(4, dest.reg2), signed=signed),
-                            flags='nzvc'
-                        )
-                    )
-                )
-            else:
+            if size == SIZE_WORD:
                 source_value = self._extend_il(il, 4, source.get_source_il(il), signed=signed)
                 dest_value = self._extend_il(il, 4, dest.get_source_il(il), signed=signed)
                 il.append(
                     il.set_reg(4,
                         dest.reg,
-                        il.mult(4,
-                            source_value,
-                            dest_value,
-                            flags='nzvc'
-                        )
+                        il.mult(4, source_value, dest_value),
                     )
                 )
+                result = il.reg(4, dest.reg)
+                self._write_multiply_flags(il, 4, result, il.const(1, 0))
+            else:
+                multiplier_reg = dest.reg2 if isinstance(dest, OpRegisterDirectPair) else dest.reg
+                il.append(
+                    il.set_reg(
+                        8,
+                        LLIL_TEMP(4),
+                        il.mult(
+                            8,
+                            self._extend_il(il, 8, source.get_source_il(il), signed=signed),
+                            self._extend_il(il, 8, il.reg(4, multiplier_reg), signed=signed),
+                        ),
+                    )
+                )
+                il.append(
+                    il.set_reg(
+                        8,
+                        LLIL_TEMP(5),
+                        il.logical_shift_right(
+                            8,
+                            il.reg(8, LLIL_TEMP(4)),
+                            il.const(1, 32),
+                        ),
+                    )
+                )
+                low_result = il.reg(4, LLIL_TEMP(4))
+                high_result = il.reg(4, LLIL_TEMP(5))
+                if isinstance(dest, OpRegisterDirectPair):
+                    il.append(il.set_reg(4, dest.reg1, high_result))
+                    il.append(il.set_reg(4, dest.reg2, low_result))
+                    self._write_multiply_flags(
+                        il,
+                        8,
+                        il.reg(8, LLIL_TEMP(4)),
+                        il.const(1, 0),
+                    )
+                else:
+                    il.append(il.set_reg(4, dest.reg, low_result))
+                    if signed:
+                        expected_high = il.expr(
+                            LowLevelILOperation.LLIL_ASR,
+                            il.reg(4, dest.reg),
+                            il.const(1, 31),
+                            size=4,
+                        )
+                    else:
+                        expected_high = il.const(4, 0)
+                    overflow = il.compare_not_equal(4, high_result, expected_high)
+                    self._write_multiply_flags(
+                        il,
+                        4,
+                        il.reg(4, dest.reg),
+                        overflow,
+                    )
         elif instr == 'divs':
             if size == 1:
                 self._lift_word_division(il, source, dest, length, signed=True)
@@ -1820,7 +1870,9 @@ class M68000(Architecture):
             self._write_status_register_il(il, source.get_source_il(il), write_sr=True)
             # STOP resumes at the following instruction after an accepted interrupt.
             il.append(il.nop())
-        elif instr in ('bgnd', 'nop', 'reset'):
+        elif instr == 'bgnd':
+            il.append(self._system_call_il(il))
+        elif instr in ('nop', 'reset'):
             il.append(il.nop())
         else:
             il.append(il.unimplemented())

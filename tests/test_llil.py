@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import Any
 
 import pytest
@@ -99,3 +100,20 @@ def assert_llil(actual: list[MockLLIL], expected: list[MockLLIL]) -> None:
 def test_llil_regressions(data: bytes, expected_disasm: str, expected_llil: list[MockLLIL]) -> None:
     assert _disasm(data) == expected_disasm
     assert_llil(_lift_to_llil(data), expected_llil)
+
+
+@pytest.mark.parametrize("data, expected_disasm", m68k_test.disasm_test_cases)
+def test_disassembly_regressions(data: bytes, expected_disasm: str) -> None:
+    assert _disasm(data) == expected_disasm
+
+
+def test_cas2_debug_log_includes_lifting_context(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    _lift_to_llil(b"\x0c\xfc\x80\x80\x90\xc1", start_addr=0x1000)
+
+    assert caplog.messages == [
+        "M68000 LLIL at 0x1000: provisional cas2.w lift "
+        "(compare=d0:d1, update=d2:d3, memory=(a0):(a1)); "
+        "paired compare/update semantics need verification"
+    ]

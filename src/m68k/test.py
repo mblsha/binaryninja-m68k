@@ -27,6 +27,7 @@ def _running_inside_binary_ninja() -> bool:
 
 
 test_cases: list[tuple[bytes, str, list[MockLLIL]]] = []
+disasm_test_cases: list[tuple[bytes, str]] = []
 
 if _running_under_pytest() and not _running_inside_binary_ninja():
     from binja_test_mocks.mock_llil import MockFlag, MockLLIL, mllil, mreg
@@ -312,4 +313,80 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
                 mllil("RET", [mllil("POP.d", [])]),
             ],
         ),
+
+        # cas2.w    d0:d1,d2:d3,(a0):(a1)
+        (
+            b"\x0c\xfc\x80\x80\x90\xc1",
+            "cas2.w    d0:d1,d2:d3,(a0):(a1)",
+            [
+                mllil(
+                    "SUB.w{nzvc}",
+                    [
+                        mllil("LOAD.w", [mllil("REG.d", [mreg("a0")])]),
+                        mllil("REG.w", [mreg("d0")]),
+                    ],
+                ),
+                mllil(
+                    "IF",
+                    [
+                        mllil("FLAG_COND", [0, None]),
+                        LabelRef("check2"),
+                        LabelRef("not_equal"),
+                    ],
+                ),
+                mllil(
+                    "SUB.w{nzvc}",
+                    [
+                        mllil("LOAD.w", [mllil("REG.d", [mreg("a1")])]),
+                        mllil("REG.w", [mreg("d1")]),
+                    ],
+                ),
+                mllil(
+                    "IF",
+                    [
+                        mllil("FLAG_COND", [0, None]),
+                        LabelRef("equal"),
+                        LabelRef("not_equal"),
+                    ],
+                ),
+                mllil(
+                    "STORE.w",
+                    [
+                        mllil("REG.d", [mreg("a0")]),
+                        mllil("REG.w", [mreg("d2")]),
+                    ],
+                ),
+                mllil(
+                    "STORE.w",
+                    [
+                        mllil("REG.d", [mreg("a1")]),
+                        mllil("REG.w", [mreg("d3")]),
+                    ],
+                ),
+                mllil("GOTO", [LabelRef("skip")]),
+                mllil(
+                    "SET_REG.w",
+                    [
+                        mreg("d0"),
+                        mllil("LOAD.w", [mllil("REG.d", [mreg("a0")])]),
+                    ],
+                ),
+                mllil(
+                    "SET_REG.w",
+                    [
+                        mreg("d1"),
+                        mllil("LOAD.w", [mllil("REG.d", [mreg("a1")])]),
+                    ],
+                ),
+                mllil("GOTO", [LabelRef("skip")]),
+            ],
+        ),
+    ]
+
+    disasm_test_cases = [
+        # mulu      d2,d1:d0
+        (b"\x4c\x02\x04\x01", "mulu      d2,d1:d0"),
+
+        # muls      d3,d5:d4
+        (b"\x4c\x03\x4c\x05", "muls      d3,d5:d4"),
     ]

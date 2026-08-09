@@ -428,7 +428,12 @@ class M68000(Architecture):
             )
         elif instr in ('muls', 'mulu'):
             if isinstance(dest, OpRegisterDirectPair):
-                log_debug(instr, 'FIXME')
+                source_text = "".join(token.text for token in source.format(il.current_address))
+                dest_text = "".join(token.text for token in dest.format(il.current_address))
+                log_debug(
+                    f"{self.name} LLIL at 0x{il.current_address:x}: provisional {instr} register-pair lift "
+                    f"(source={source_text}, destination={dest_text}); 64-bit result semantics need verification"
+                )
                 il.append(
                     il.set_reg_split(4,
                         dest.reg1,
@@ -621,7 +626,14 @@ class M68000(Architecture):
                 skip = LowLevelILLabel()
                 skip_label_found = False
 
-            log_debug(instr, 'FIXME')
+            source_text = "".join(token.text for token in source.format(il.current_address))
+            dest_text = "".join(token.text for token in dest.format(il.current_address))
+            third_text = "".join(token.text for token in third.format(il.current_address))
+            log_debug(
+                f"{self.name} LLIL at 0x{il.current_address:x}: provisional cas2{SizeSuffix[size]} lift "
+                f"(compare={source_text}, update={dest_text}, memory={third_text}); "
+                "paired compare/update semantics need verification"
+            )
             il.append(
                 il.sub(size_bytes,
                     # FIXME
@@ -641,7 +653,6 @@ class M68000(Architecture):
 
             il.mark_label(check2)
 
-            log_debug(instr, 'FIXME')
             il.append(
                 il.sub(size_bytes,
                     # FIXME

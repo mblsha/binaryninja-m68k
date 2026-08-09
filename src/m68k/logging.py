@@ -38,18 +38,40 @@ else:
     if _bn_logger is not None:
         __logger = _bn_logger(0, __module__.__name__)
 
-        log = __logger.log
-        log_debug = __logger.log_debug
-        log_info = __logger.log_info
-        log_warn = __logger.log_warn
-        log_error = __logger.log_error
-        log_alert = __logger.log_alert
+        def log(level: object, message: object) -> None:
+            __logger.log(level, str(message))
+
+        def log_debug(message: object) -> None:
+            __logger.log_debug(str(message))
+
+        def log_info(message: object) -> None:
+            __logger.log_info(str(message))
+
+        def log_warn(message: object) -> None:
+            __logger.log_warn(str(message))
+
+        def log_error(message: object) -> None:
+            __logger.log_error(str(message))
+
+        def log_alert(message: object) -> None:
+            __logger.log_alert(str(message))
     else:
         __logger = _py_logging.getLogger(__module__.__name__)
 
-        log = __logger.log
-        log_debug = __logger.debug
-        log_info = __logger.info
-        log_warn = __logger.warning
-        log_error = __logger.error
-        log_alert = __logger.critical
+        def log(level: int, message: object) -> None:
+            __logger.log(level, "%s", message)
+
+        def log_debug(message: object) -> None:
+            __logger.debug("%s", message)
+
+        def log_info(message: object) -> None:
+            __logger.info("%s", message)
+
+        def log_warn(message: object) -> None:
+            __logger.warning("%s", message)
+
+        def log_error(message: object) -> None:
+            __logger.error("%s", message)
+
+        def log_alert(message: object) -> None:
+            __logger.critical("%s", message)

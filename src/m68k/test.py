@@ -48,6 +48,35 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
         out.append(mllil("RET", [mllil("POP.d", [])]))
         return out
 
+    def _status_restore_expected(register: str, value: MockLLIL, size_suffix: str) -> list[MockLLIL]:
+        out = [
+            mllil("SET_REG.w", [mreg("TEMP7"), value]),
+            mllil(
+                f"SET_REG.{size_suffix}",
+                [mreg(register), mllil(f"REG.{size_suffix}", [mreg("TEMP7")])],
+            ),
+        ]
+        for flag, mask in (("c", 1), ("v", 2), ("z", 4), ("n", 8), ("x", 16)):
+            out.append(
+                mllil(
+                    "SET_FLAG",
+                    [
+                        MockFlag(flag),
+                        mllil(
+                            "CMP_NE.b",
+                            [
+                                mllil(
+                                    "AND.b",
+                                    [mllil("REG.b", [mreg("TEMP7")]), mllil("CONST.b", [mask])],
+                                ),
+                                mllil("CONST.b", [0]),
+                            ],
+                        ),
+                    ],
+                )
+            )
+        return out
+
     test_cases = [
         # moveq     #$0000,d0
         (
@@ -259,7 +288,6 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
             "ori.b     #$1,ccr",
             [
                 mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [1])]),
-                mllil("SET_FLAG", [MockFlag("x"), mllil("CONST.b", [1])]),
             ],
         ),
 
@@ -276,7 +304,7 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
                         LabelRef("clear"),
                     ],
                 ),
-                mllil("SET_REG.b", [mreg("d1.b"), mllil("CONST.b", [1])]),
+                mllil("SET_REG.b", [mreg("d1.b"), mllil("CONST.b", [0xff])]),
                 mllil("GOTO", [LabelRef("skip")]),
                 mllil("SET_REG.b", [mreg("d1.b"), mllil("CONST.b", [0])]),
                 mllil("GOTO", [LabelRef("skip")]),
@@ -293,14 +321,16 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
                     [
                         mreg("d6"),
                         mllil(
-                            "ROR.d",
+                            "ROR.d{nz}",
                             [
                                 mllil("REG.d", [mreg("d6")]),
                                 mllil("CONST.b", [0x10]),
                             ],
                         ),
                     ],
-                )
+                ),
+                mllil("SET_FLAG", [MockFlag("v"), mllil("CONST.b", [0])]),
+                mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [0])]),
             ],
         ),
 
@@ -308,10 +338,8 @@ if _running_under_pytest() and not _running_inside_binary_ninja():
         (
             b"\x4e\x77",
             "rtr",
-            [
-                mllil("SET_REG.w", [mreg("ccr"), mllil("POP.w", [])]),
-                mllil("RET", [mllil("POP.d", [])]),
-            ],
+            _status_restore_expected("ccr", mllil("POP.w", []), "b")
+            + [mllil("RET", [mllil("POP.d", [])])],
         ),
 
         # cas2.w    d0:d1,d2:d3,(a0):(a1)

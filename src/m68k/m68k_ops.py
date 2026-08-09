@@ -162,6 +162,48 @@ SizeSuffix = [
 ]
 
 
+def _address_register_step(reg: str, size: int) -> int:
+    """Return the architectural predecrement/postincrement step."""
+    if reg == 'sp' and size == SIZE_BYTE:
+        return 2
+    return 1 << size
+
+
+def _base_register_il(il: LowLevelILFunction, reg: Optional[str]) -> ExpressionIndex:
+    if reg is None:
+        return il.const(4, 0)
+    if reg == 'pc':
+        return il.const_pointer(4, il.current_address + 2)
+    return il.reg(4, reg)
+
+
+def _index_register_il(il: LowLevelILFunction, reg: Optional[str], is_long: bool) -> ExpressionIndex:
+    if reg is None:
+        return il.const(4, 0)
+    value = il.reg(4 if is_long else 2, reg)
+    if is_long:
+        return value
+    return il.expr(LowLevelILOperation.LLIL_SX, value, size=4)
+
+
+def _compose_ccr_il(il: LowLevelILFunction, size: int = 1) -> ExpressionIndex:
+    def flag_value(name: str, bit: int) -> ExpressionIndex:
+        value = il.expr(LowLevelILOperation.LLIL_ZX, il.flag(name), size=size)
+        if bit == 0:
+            return value
+        return il.shift_left(size, value, il.const(1, bit))
+
+    return il.or_expr(
+        size,
+        il.or_expr(
+            size,
+            il.or_expr(size, il.or_expr(size, flag_value('c', 0), flag_value('v', 1)), flag_value('z', 2)),
+            flag_value('n', 3),
+        ),
+        flag_value('x', 4),
+    )
+
+
 def dump(obj):
     for attr in dir(obj):
         print("obj.%s = %r" % (attr, getattr(obj, attr)))
@@ -217,14 +259,14 @@ class OpRegisterDirect(Operand):
 
     def get_source_il(self, il: LowLevelILFunction) -> ExpressionIndex:
         if self.reg == 'ccr':
-            c = il.flag_bit(1, 'c', 0)
-            v = il.flag_bit(1, 'v', 1)
-            z = il.flag_bit(1, 'z', 2)
-            n = il.flag_bit(1, 'n', 3)
-            x = il.flag_bit(1, 'x', 4)
-            print(self)
-            # FIXME: return array
-            return il.or_expr(1, il.or_expr(1, il.or_expr(1, il.or_expr(1, c, v), z), n), x)
+            return _compose_ccr_il(il, 1 << self.size)
+        elif self.reg == 'sr':
+            size = 1 << self.size
+            return il.or_expr(
+                size,
+                il.and_expr(size, il.reg(size, 'sr'), il.const(size, 0xffe0)),
+                _compose_ccr_il(il, size),
+            )
         else:
             return il.reg(1 << self.size, self.reg)
 
@@ -431,7 +473,7 @@ class OpRegisterIndirectPostincrement(Operand):
             self.reg,
             il.add(4,
                 il.reg(4, self.reg),
-                il.const(4, 1 << self.size)
+                il.const(4, _address_register_step(self.reg, self.size))
             )
         )
 
@@ -470,7 +512,7 @@ class OpRegisterIndirectPredecrement(Operand):
             self.reg,
             il.sub(4,
                 il.reg(4, self.reg),
-                il.const(4, 1 << self.size)
+                il.const(4, _address_register_step(self.reg, self.size))
             )
         )
 
@@ -559,14 +601,17 @@ class OpRegisterIndirectIndex(Operand):
         if self.offset != 0:
             tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "${:x}".format(self.offset), self.offset))
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "("))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.ireg))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "."))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "l" if self.ireg_long else 'w'))
-        if self.scale != 1:
-            tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, "*"))
-            tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "{}".format(self.scale), self.scale))
+        if self.reg is not None:
+            tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
+        if self.ireg is not None:
+            if self.reg is not None:
+                tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
+            tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.ireg))
+            tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "."))
+            tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "l" if self.ireg_long else 'w'))
+            if self.scale != 1:
+                tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, "*"))
+                tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "{}".format(self.scale), self.scale))
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ")"))
         return tokens
 
@@ -587,11 +632,11 @@ class OpRegisterIndirectIndex(Operand):
         #         il.const(1, self.scale)
         #     )
         # )
-        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        a = _base_register_il(il, self.reg)
         b = il.const(4, self.offset)
         e = il.add(4, a, b)
 
-        c = il.reg(4 if self.ireg_long else 2, self.ireg)
+        c = _index_register_il(il, self.ireg, self.ireg_long)
         d = il.const(1, self.scale)
         f = il.mult(4, c, d)
 
@@ -626,8 +671,10 @@ class OpMemoryIndirect(Operand):
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "["))
         if self.offset != 0:
             tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "${:x}".format(self.offset), self.offset))
-            tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
+            if self.reg is not None:
+                tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
+        if self.reg is not None:
+            tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, "]"))
         if self.outer_displacement != 0:
             tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
@@ -651,7 +698,7 @@ class OpMemoryIndirect(Operand):
         #     ),
         #     il.const(4, self.outer_displacement)
         # )
-        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        a = _base_register_il(il, self.reg)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
         d = il.load(4, c)
@@ -692,8 +739,10 @@ class OpMemoryIndirectPostindex(Operand):
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "["))
         if self.offset != 0:
             tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "${:x}".format(self.offset), self.offset))
-            tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
+            if self.reg is not None:
+                tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
+        if self.reg is not None:
+            tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
         tokens.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, "]"))
         tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
         tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.ireg))
@@ -730,14 +779,14 @@ class OpMemoryIndirectPostindex(Operand):
         #         h = il.const(4, self.outer_displacement)
         #     )
         # )
-        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        a = _base_register_il(il, self.reg)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
         d = il.load(4, c)
 
-        e = il.reg(4 if self.ireg_long else 2, self.ireg),
+        e = _index_register_il(il, self.ireg, self.ireg_long)
         f = il.const(1, self.scale)
-        g = il.mult(4, e[0], f)
+        g = il.mult(4, e, f)
 
         h = il.const(4, self.outer_displacement)
         i = il.add(4, g, h)
@@ -776,9 +825,11 @@ class OpMemoryIndirectPreindex(Operand):
         tokens.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, "["))
         if self.offset != 0:
             tokens.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, "${:x}".format(self.offset), self.offset))
+            if self.reg is not None:
+                tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
+        if self.reg is not None:
+            tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
             tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.reg))
-        tokens.append(InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ","))
         tokens.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, self.ireg))
         tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "."))
         tokens.append(InstructionTextToken(InstructionTextTokenType.TextToken, "l" if self.ireg_long else 'w'))
@@ -814,11 +865,11 @@ class OpMemoryIndirectPreindex(Operand):
         #     ),
         #     il.const(4, self.outer_displacement)
         # )
-        a = il.const_pointer(4, il.current_address+2) if self.reg == 'pc' else il.reg(4, self.reg)
+        a = _base_register_il(il, self.reg)
         b = il.const(4, self.offset)
         c = il.add(4, a, b)
 
-        d = il.reg(4 if self.ireg_long else 2, self.ireg)
+        d = _index_register_il(il, self.ireg, self.ireg_long)
         e = il.const(1, self.scale)
         f = il.mult(4, d, e)
 
@@ -868,7 +919,7 @@ class OpAbsolute(Operand):
         # return il.sign_extend(self.address_width,
         #     il.const(1 << self.address_size, self.address)
         # )
-        a = il.const_pointer(1 << self.address_size, self.address)
+        a = il.const_pointer(self.address_width, self.address)
         return (a, [a])
         # FIXME: binja 3.0.3355-dev won't show function arguments if we
         # use il.sign_extend.

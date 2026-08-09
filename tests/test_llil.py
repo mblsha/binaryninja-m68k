@@ -739,3 +739,161 @@ def test_rte_restores_flags_and_rotate_preserves_x() -> None:
 
     rotate_nodes = _lift_to_llil(b"\xe1\x98")
     assert rotate_nodes[0].ops[1].op == "ROL.d{nzvc}"
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x41\x40", m68k_arch.M68020),  # CHK reserved fixed bit
+        (b"\xc1\x80", m68k_arch.M68000),  # reserved EXG/AND collision
+        (b"\x0a\xfc\x80\x80\x90\xc1", m68k_arch.M68020),  # CAS2.B is illegal
+        (b"\x08\x00\x55\x00", m68k_arch.M68000),  # static bit reserved byte
+        (b"\x00\x3c\x55\x00", m68k_arch.M68000),  # ORI.B reserved byte
+        (b"\x02\x3c\x55\x00", m68k_arch.M68000),  # ANDI.B reserved byte
+        (b"\x0a\x3c\x55\x00", m68k_arch.M68000),  # EORI.B reserved byte
+        (b"\xf4\x20", m68k_arch.M68040),  # CPUSH scope 00
+    ],
+)
+def test_decoder_rejects_newly_audited_reserved_encodings(data: bytes, arch_cls: type) -> None:
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[0] == "unimplemented"
+
+
+@pytest.mark.parametrize(
+    "data, expected_instr",
+    [
+        (b"\xc1\x41", "exg"),  # EXG D0,D1
+        (b"\xc1\x89", "exg"),  # EXG D0,A1
+        (b"\xf4\x28", "cpush"),  # CPUSHL with legal scope 01
+    ],
+)
+def test_decoder_keeps_valid_encodings_adjacent_to_reserved_fields(
+    data: bytes, expected_instr: str
+) -> None:
+    arch_cls = m68k_arch.M68040 if data.startswith(b"\xf4") else m68k_arch.M68000
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[0] == expected_instr
+
+
+def test_cas2_alias_failure_keeps_memory_operand_one() -> None:
+    nodes = _lift_to_llil(b"\x0c\xfc\x80\x80\x90\xc0", arch_cls=m68k_arch.M68020)
+    compare_register_writes = [
+        node
+        for node in nodes
+        if node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "d0"
+    ]
+
+    assert len(compare_register_writes) == 1
+    assert getattr(compare_register_writes[0].ops[1].ops[0], "name", None) == "TEMP0"
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x81\xc0", m68k_arch.M68000),
+        (b"\x4c\x40\x00\x00", m68k_arch.M68020),
+    ],
+)
+def test_divide_by_zero_clears_c_before_the_trap(
+    data: bytes, arch_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(arch_cls, "_system_call_il", staticmethod(lambda il: il.unimplemented()))
+    monkeypatch.setattr(
+        arch_cls,
+        "_division_result_il",
+        staticmethod(
+            lambda il, size, dividend, divisor, signed: (
+                il.const(size, 0),
+                il.const(size, 0),
+            )
+        ),
+    )
+    nodes = _lift_to_llil(data, arch_cls=arch_cls)
+    trap_index = next(i for i, node in enumerate(nodes) if node.bare_op() == "UNIMPL")
+    carry_write = nodes[trap_index - 1]
+
+    assert carry_write.bare_op() == "SET_FLAG"
+    assert getattr(carry_write.ops[0], "name", None) == "c"
+    assert carry_write.ops[1].ops[0] == 0
+
+
+def test_word_divs_checks_host_width_overflow_before_dividing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        m68k_arch.M68000,
+        "_division_result_il",
+        staticmethod(lambda il, size, dividend, divisor, signed: (il.const(size, 0), il.const(size, 0))),
+    )
+    monkeypatch.setattr(
+        m68k_arch.M68000,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+
+    nodes = _lift_to_llil(b"\x81\xc0")
+    conditions = [node.ops[0] for node in nodes if node.bare_op() == "IF"]
+
+    assert conditions[0].bare_op() == "CMP_E"  # divisor == 0
+    assert conditions[1].bare_op() == "AND"  # INT32_MIN / -1
+    assert conditions[2].bare_op() == "OR"  # quotient outside signed 16-bit range
+
+
+def test_long_multiply_with_an_aliased_result_pair_is_not_over_specified(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    assert _disasm(b"\x4c\x00\x04\x00", arch_cls=m68k_arch.M68020) == "mulu      d0,d0:d0"
+    assert [node.bare_op() for node in _lift_to_llil(
+        b"\x4c\x00\x04\x00", start_addr=0x1000, arch_cls=m68k_arch.M68020
+    )] == ["UNIMPL"]
+    assert caplog.messages == [
+        "M68020 LLIL at 0x1000: mulu uses the same register (d0) for both halves of an "
+        "undefined 64-bit result; emitting unimplemented instead of deterministic register state"
+    ]
+
+
+@pytest.mark.parametrize(
+    "data, expected_disasm, arithmetic_op",
+    [
+        (b"\xc1\x01", "abcd      d1,d0", "ADD"),
+        (b"\x81\x01", "sbcd      d1,d0", "SUB"),
+        (b"\x48\x00", "nbcd      d0", "SUB"),
+    ],
+)
+def test_bcd_lifting_writes_decimal_result_and_defined_flags(
+    data: bytes, expected_disasm: str, arithmetic_op: str
+) -> None:
+    assert _disasm(data) == expected_disasm
+    nodes = _lift_to_llil(data)
+
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    result_write = next(
+        node
+        for node in nodes
+        if node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "d0.b"
+    )
+    assert getattr(result_write.ops[1].ops[0], "name", None) == "TEMP5"
+    assert any(
+        node.bare_op() == "SET_REG"
+        and getattr(node.ops[0], "name", None) == "TEMP5"
+        and node.ops[1].bare_op() == arithmetic_op
+        for node in nodes
+    )
+
+    flag_writes = [node for node in nodes if node.bare_op() == "SET_FLAG"]
+    assert [getattr(node.ops[0], "name", None) for node in flag_writes] == ["x", "c", "z"]
+    assert flag_writes[0].ops[1] == flag_writes[1].ops[1]
+    assert flag_writes[2].ops[1].bare_op() == "AND"
+
+
+def test_bcd_memory_form_evaluates_shared_predecrement_operands_in_order() -> None:
+    nodes = _lift_to_llil(b"\xc1\x08")  # ABCD -(A0),-(A0)
+
+    assert [getattr(node.ops[0], "name", None) for node in nodes[:4]] == [
+        "a0",
+        "TEMP100",
+        "a0",
+        "TEMP0",
+    ]
+    assert nodes[1].ops[1].bare_op() == "LOAD"
+    assert any(node.bare_op() == "STORE" for node in nodes)

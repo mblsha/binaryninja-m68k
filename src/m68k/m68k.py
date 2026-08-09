@@ -382,6 +382,163 @@ class M68000(Architecture):
         il.append(il.set_flag('c', il.const(1, 0)))
 
     @staticmethod
+    def _write_bcd_flags(
+        il: LowLevelILFunction,
+        decimal_carry: ExpressionIndex,
+    ) -> None:
+        # N and V are architecturally undefined, so do not manufacture values
+        # for them. Z is cumulative across a multi-byte decimal operation.
+        il.append(il.set_flag('x', decimal_carry))
+        il.append(il.set_flag('c', decimal_carry))
+        il.append(
+            il.set_flag(
+                'z',
+                il.and_expr(
+                    1,
+                    il.reg(1, LLIL_TEMP(3)),
+                    il.compare_equal(1, il.reg(1, LLIL_TEMP(5)), il.const(1, 0)),
+                ),
+            )
+        )
+
+    def _lift_bcd_addition(
+        self,
+        il: LowLevelILFunction,
+        source: Operand,
+        dest: Operand,
+    ) -> None:
+        # Work at word width so the decimal carry remains observable after the
+        # packed-BCD result is truncated back to a byte.
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(0),
+                self._extend_il(il, 2, source.get_source_il(il), False),
+            )
+        )
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(1),
+                self._extend_il(il, 2, dest.get_source_il(il), False),
+            )
+        )
+        il.append(il.set_reg(1, LLIL_TEMP(2), il.flag('x')))
+        il.append(il.set_reg(1, LLIL_TEMP(3), il.flag('z')))
+
+        extend = self._extend_il(il, 2, il.reg(1, LLIL_TEMP(2)), False)
+        low_sum = il.add(
+            2,
+            il.add(
+                2,
+                il.and_expr(2, il.reg(2, LLIL_TEMP(0)), il.const(2, 0x0f)),
+                il.and_expr(2, il.reg(2, LLIL_TEMP(1)), il.const(2, 0x0f)),
+            ),
+            extend,
+        )
+        low_adjust = il.mult(
+            2,
+            self._extend_il(
+                il,
+                2,
+                il.compare_unsigned_greater_than(2, low_sum, il.const(2, 9)),
+                False,
+            ),
+            il.const(2, 6),
+        )
+        binary_sum = il.add(
+            2,
+            il.add(2, il.reg(2, LLIL_TEMP(1)), il.reg(2, LLIL_TEMP(0))),
+            extend,
+        )
+        il.append(il.set_reg(2, LLIL_TEMP(4), il.add(2, binary_sum, low_adjust)))
+
+        decimal_carry = il.compare_unsigned_greater_than(
+            2,
+            il.reg(2, LLIL_TEMP(4)),
+            il.const(2, 0x99),
+        )
+        high_adjust = il.mult(
+            2,
+            self._extend_il(il, 2, decimal_carry, False),
+            il.const(2, 0x60),
+        )
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(5),
+                il.add(2, il.reg(2, LLIL_TEMP(4)), high_adjust),
+            )
+        )
+        il.append(dest.get_dest_il(il, il.reg(1, LLIL_TEMP(5))))
+        self._write_bcd_flags(il, decimal_carry)
+
+    def _lift_bcd_subtraction(
+        self,
+        il: LowLevelILFunction,
+        source: Optional[Operand],
+        dest: Operand,
+    ) -> None:
+        if source is None:
+            subtrahend = dest.get_source_il(il)
+            minuend = il.const(1, 0)
+        else:
+            subtrahend = source.get_source_il(il)
+            minuend = dest.get_source_il(il)
+
+        il.append(il.set_reg(2, LLIL_TEMP(0), self._extend_il(il, 2, subtrahend, False)))
+        il.append(il.set_reg(2, LLIL_TEMP(1), self._extend_il(il, 2, minuend, False)))
+        il.append(il.set_reg(1, LLIL_TEMP(2), il.flag('x')))
+        il.append(il.set_reg(1, LLIL_TEMP(3), il.flag('z')))
+
+        extend = self._extend_il(il, 2, il.reg(1, LLIL_TEMP(2)), False)
+        low_subtrahend = il.add(
+            2,
+            il.and_expr(2, il.reg(2, LLIL_TEMP(0)), il.const(2, 0x0f)),
+            extend,
+        )
+        low_borrow = il.compare_unsigned_greater_than(
+            2,
+            low_subtrahend,
+            il.and_expr(2, il.reg(2, LLIL_TEMP(1)), il.const(2, 0x0f)),
+        )
+        low_adjust = il.mult(
+            2,
+            self._extend_il(il, 2, low_borrow, False),
+            il.const(2, 6),
+        )
+        binary_difference = il.sub(
+            2,
+            il.sub(2, il.reg(2, LLIL_TEMP(1)), il.reg(2, LLIL_TEMP(0))),
+            extend,
+        )
+        il.append(il.set_reg(2, LLIL_TEMP(4), binary_difference))
+
+        decimal_borrow = il.compare_signed_less_than(
+            2,
+            il.reg(2, LLIL_TEMP(4)),
+            il.const(2, 0),
+        )
+        high_adjust = il.mult(
+            2,
+            self._extend_il(il, 2, decimal_borrow, False),
+            il.const(2, 0x60),
+        )
+        il.append(
+            il.set_reg(
+                2,
+                LLIL_TEMP(5),
+                il.sub(
+                    2,
+                    il.sub(2, il.reg(2, LLIL_TEMP(4)), low_adjust),
+                    high_adjust,
+                ),
+            )
+        )
+        il.append(dest.get_dest_il(il, il.reg(1, LLIL_TEMP(5))))
+        self._write_bcd_flags(il, decimal_borrow)
+
+    @staticmethod
     def _division_result_il(
         il: LowLevelILFunction,
         size: int,
@@ -413,6 +570,7 @@ class M68000(Architecture):
             skip = LowLevelILLabel()
             skip_label_found = False
 
+        check_overflow = LowLevelILLabel()
         divide = LowLevelILLabel()
         divide_by_zero = LowLevelILLabel()
         overflow = LowLevelILLabel()
@@ -430,13 +588,25 @@ class M68000(Architecture):
             il.if_expr(
                 il.compare_equal(4, il.reg(4, LLIL_TEMP(1)), il.const(4, 0)),
                 divide_by_zero,
-                divide,
+                check_overflow,
             )
         )
 
         il.mark_label(divide_by_zero)
+        il.append(il.set_flag('c', il.const(1, 0)))
         il.append(self._system_call_il(il))
         il.append(il.goto(skip))
+
+        il.mark_label(check_overflow)
+        if signed:
+            signed_min_overflow = il.and_expr(
+                1,
+                il.compare_equal(4, il.reg(4, LLIL_TEMP(0)), il.const(4, -0x80000000)),
+                il.compare_equal(4, il.reg(4, LLIL_TEMP(1)), il.const(4, -1)),
+            )
+            il.append(il.if_expr(signed_min_overflow, overflow, divide))
+        else:
+            il.append(il.goto(divide))
 
         il.mark_label(divide)
         quotient, remainder = self._division_result_il(
@@ -538,6 +708,7 @@ class M68000(Architecture):
         )
 
         il.mark_label(divide_by_zero)
+        il.append(il.set_flag('c', il.const(1, 0)))
         il.append(self._system_call_il(il))
         il.append(il.goto(skip))
 
@@ -861,14 +1032,11 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'abcd':
-            # TODO
-            il.append(il.unimplemented())
+            self._lift_bcd_addition(il, source, dest)
         elif instr == 'sbcd':
-            # TODO
-            il.append(il.unimplemented())
+            self._lift_bcd_subtraction(il, source, dest)
         elif instr == 'nbcd':
-            # TODO
-            il.append(il.unimplemented())
+            self._lift_bcd_subtraction(il, None, dest)
         elif instr == 'pack':
             il.append(
                 il.set_reg(2,
@@ -936,6 +1104,13 @@ class M68000(Architecture):
                 )
                 result = il.reg(4, dest.reg)
                 self._write_multiply_flags(il, 4, result, il.const(1, 0))
+            elif isinstance(dest, OpRegisterDirectPair) and dest.reg1 == dest.reg2:
+                log_debug(
+                    f"{self.name} LLIL at 0x{il.current_address:x}: {instr} uses the same "
+                    f"register ({dest.reg1}) for both halves of an undefined 64-bit result; "
+                    "emitting unimplemented instead of deterministic register state"
+                )
+                il.append(il.unimplemented())
             else:
                 multiplier_reg = dest.reg2 if isinstance(dest, OpRegisterDirectPair) else dest.reg
                 il.append(
@@ -1117,10 +1292,14 @@ class M68000(Architecture):
 
             il.mark_label(not_equal)
 
-            for it in source.get_dest_il(il,
-                        (il.reg(size_bytes, LLIL_TEMP(0)), il.reg(size_bytes, LLIL_TEMP(1)))
-                    ):
-                il.append(it)
+            if source.reg1 == source.reg2:
+                il.append(il.set_reg(size_bytes, source.reg1, il.reg(size_bytes, LLIL_TEMP(0))))
+            else:
+                for it in source.get_dest_il(
+                    il,
+                    (il.reg(size_bytes, LLIL_TEMP(0)), il.reg(size_bytes, LLIL_TEMP(1))),
+                ):
+                    il.append(it)
 
             il.append(
                 il.goto(skip)

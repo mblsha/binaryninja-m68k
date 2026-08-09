@@ -293,9 +293,10 @@ class OpRegisterDirect(Operand):
             return _compose_ccr_il(il, 1 << self.size)
         elif self.reg == 'sr':
             size = 1 << self.size
+            system_mask = getattr(il.arch, 'sr_write_mask', 0xffff) & 0xffe0
             return il.or_expr(
                 size,
-                il.and_expr(size, il.reg(size, 'sr'), il.const(size, 0xffe0)),
+                il.and_expr(size, il.reg(size, 'sr'), il.const(size, system_mask)),
                 _compose_ccr_il(il, size),
             )
         else:

@@ -308,6 +308,8 @@ def test_status_writes_restore_each_condition_flag() -> None:
     nodes = _lift_to_llil(b"\x44\xfc\x00\x01")
 
     assert nodes[1].op == "SET_REG.b"
+    assert nodes[1].ops[1].bare_op() == "AND"
+    assert nodes[1].ops[1].ops[1].ops[0] == 0x1f
     flag_writes = nodes[2:]
     assert [getattr(node.ops[0], "name", None) for node in flag_writes] == ["c", "v", "z", "n", "x"]
     masks = [node.ops[1].ops[0].ops[1].ops[0] for node in flag_writes]
@@ -435,7 +437,7 @@ def test_immediate_logical_to_sr_updates_the_full_status_register(data: bytes, l
     composed_status = nodes[0].ops[1].ops[0]
     assert composed_status.bare_op() == "OR"
     assert composed_status.ops[0].bare_op() == "AND"
-    assert composed_status.ops[0].ops[1].ops[0] == 0xffe0
+    assert composed_status.ops[0].ops[1].ops[0] == 0xa700
     assert composed_status.ops[1].bare_op() == "OR"
     assert nodes[1].op == "SET_REG.w"
     assert getattr(nodes[1].ops[0], "name", None) == "sr"
@@ -607,18 +609,32 @@ def test_chk_sets_n_to_identify_the_failed_bound(
     assert any(node.bare_op() == "UNIMPL" for node in nodes)
 
 
-def test_newer_cpu_rte_does_not_assume_a_68000_exception_frame(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level(logging.DEBUG, logger="m68k.logging")
-
+def test_newer_cpu_rte_dispatches_on_the_exception_frame_format() -> None:
     nodes = _lift_to_llil(b"\x4e\x73", start_addr=0x1000, arch_cls=m68k_arch.M68020)
 
-    assert [node.bare_op() for node in nodes] == ["UNIMPL"]
-    assert caplog.messages == [
-        "M68020 LLIL at 0x1000: format-dependent RTE frame is not lifted; "
-        "emitting unimplemented instead of assuming a 68000 frame"
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    format_tests = [node.ops[0] for node in nodes if node.bare_op() == "IF"]
+    assert [test.ops[1].ops[0] for test in format_tests] == [0, 1, 2, 9, 10, 11]
+    frame_sizes = [
+        node.ops[1].ops[0]
+        for node in nodes
+        if node.op == "SET_REG.d" and getattr(node.ops[0], "name", None) == "TEMP44"
     ]
+    assert frame_sizes == [8, 12, 20, 32, 92]
+    assert any(node.bare_op() == "NORET" for node in nodes)
+    assert nodes[-1].bare_op() == "RET"
+
+
+def test_rte_throwaway_frame_restarts_frame_processing() -> None:
+    arch = m68k_arch.M68020()
+    il = lowlevelil.LowLevelILFunction(arch)
+    il.current_address = 0x1000  # type: ignore[attr-defined]
+
+    arch.get_instruction_low_level_il(b"\x4e\x73", 0x1000, il)
+
+    process_label = next(node.label for node in il if isinstance(node, MockLabel))
+    gotos = [node for node in il if node.bare_op() == "GOTO"]
+    assert any(node.ops[0] is process_label for node in gotos)
 
 
 def test_decoder_enforces_cpu_generation_and_instruction_length() -> None:
@@ -687,9 +703,13 @@ def test_bitfield_decoder_consumes_the_ea_and_exposes_the_operand() -> None:
     assert _disasm(b"\xe8\xf0\x00\x00\x00\x00", arch_cls=m68k_arch.M68020) == (
         "bftst     (a0,d0.w){0:32}"
     )
-    assert [node.bare_op() for node in _lift_to_llil(
-        b"\xe8\xf0\x00\x00\x00\x00", arch_cls=m68k_arch.M68020
-    )] == ["UNIMPL"]
+    nodes = _lift_to_llil(b"\xe8\xf0\x00\x00\x00\x00", arch_cls=m68k_arch.M68020)
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    assert [
+        getattr(node.ops[0], "name", None)
+        for node in nodes
+        if node.bare_op() == "SET_FLAG"
+    ] == ["n", "z", "v", "c"]
 
 
 def test_long_multiply_writes_explicit_flags_from_the_architectural_result() -> None:
@@ -897,3 +917,320 @@ def test_bcd_memory_form_evaluates_shared_predecrement_operands_in_order() -> No
     ]
     assert nodes[1].ops[1].bare_op() == "LOAD"
     assert any(node.bare_op() == "STORE" for node in nodes)
+
+
+@pytest.mark.parametrize(
+    "data, expected_loads, expected_stores",
+    [
+        (b"\x01\x08\x00\x00", 2, 0),  # MOVEP.W (0,A0),D0
+        (b"\x01\x48\x00\x00", 4, 0),  # MOVEP.L (0,A0),D0
+        (b"\x01\x88\x00\x00", 0, 2),  # MOVEP.W D0,(0,A0)
+        (b"\x01\xc8\x00\x00", 0, 4),  # MOVEP.L D0,(0,A0)
+    ],
+)
+def test_movep_uses_interleaved_peripheral_bytes(
+    data: bytes, expected_loads: int, expected_stores: int
+) -> None:
+    nodes = _lift_to_llil(data)
+
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    loads: list[MockLLIL] = []
+
+    def collect_loads(node: Any) -> None:
+        if not isinstance(node, MockLLIL):
+            return
+        if node.bare_op() == "LOAD":
+            loads.append(node)
+        for operand in node.ops:
+            collect_loads(operand)
+
+    for node in nodes:
+        collect_loads(node)
+    stores = [node for node in nodes if node.bare_op() == "STORE"]
+    assert len(loads) == expected_loads
+    assert len(stores) == expected_stores
+    assert all(node.width() == 1 for node in loads + stores)
+    if stores:
+        assert [node.ops[0].ops[1].ops[0] for node in stores] == list(
+            range(0, expected_stores * 2, 2)
+        )
+
+
+def test_moves_preserves_register_width_and_reports_flat_address_space(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    data_nodes = _lift_to_llil(b"\x0e\x50\x00\x00", start_addr=0x1000, arch_cls=m68k_arch.M68010)
+    address_nodes = _lift_to_llil(b"\x0e\x50\x80\x00", start_addr=0x1002, arch_cls=m68k_arch.M68010)
+    store_nodes = _lift_to_llil(b"\x0e\x50\x48\x00", start_addr=0x1004, arch_cls=m68k_arch.M68010)
+
+    assert data_nodes[0].op == "SET_REG.w"
+    assert getattr(data_nodes[0].ops[0], "name", None) == "d0.w"
+    assert address_nodes[0].op == "SET_REG.d"
+    assert getattr(address_nodes[0].ops[0], "name", None) == "a0"
+    assert address_nodes[0].ops[1].bare_op() == "SX"
+    assert [node.bare_op() for node in store_nodes] == ["STORE"]
+    assert all(
+        node.bare_op() != "SET_FLAG"
+        for node in data_nodes + address_nodes + store_nodes
+    )
+    assert caplog.messages == [
+        "M68010 LLIL at 0x1000: moves.w uses SFC; alternate address-space selection "
+        "is represented in Binary Ninja's flat LLIL memory",
+        "M68010 LLIL at 0x1002: moves.w uses SFC; alternate address-space selection "
+        "is represented in Binary Ninja's flat LLIL memory",
+        "M68010 LLIL at 0x1004: moves.w uses DFC; alternate address-space selection "
+        "is represented in Binary Ninja's flat LLIL memory",
+    ]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\xe8\xd0\x00\x08",  # BFTST
+        b"\xea\xd0\x00\x08",  # BFCHG
+        b"\xec\xd0\x00\x08",  # BFCLR
+        b"\xeb\xd0\x10\x08",  # BFEXTS
+        b"\xe9\xd0\x10\x08",  # BFEXTU
+        b"\xed\xd0\x10\x08",  # BFFFO
+        b"\xef\xd0\x10\x08",  # BFINS
+        b"\xee\xd0\x00\x08",  # BFSET
+    ],
+)
+def test_all_bitfield_instructions_have_explicit_lifts(data: bytes) -> None:
+    nodes = _lift_to_llil(data, arch_cls=m68k_arch.M68020)
+
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    flags = [
+        getattr(node.ops[0], "name", None)
+        for node in nodes
+        if node.bare_op() == "SET_FLAG"
+    ]
+    assert flags == ["n", "z", "v", "c"]
+
+
+def test_memory_bitfields_use_only_byte_sized_accesses_and_dynamic_span_guards() -> None:
+    nodes = _lift_to_llil(b"\xea\xd0\x01\xc0", arch_cls=m68k_arch.M68020)  # BFCHG (A0){7:32}
+
+    accesses: list[MockLLIL] = []
+
+    def collect_accesses(node: Any) -> None:
+        if not isinstance(node, MockLLIL):
+            return
+        if node.bare_op() in ("LOAD", "STORE"):
+            accesses.append(node)
+        for operand in node.ops:
+            collect_accesses(operand)
+
+    for node in nodes:
+        collect_accesses(node)
+    assert accesses
+    assert all(access.width() == 1 for access in accesses)
+    span_guards = [node for node in nodes if node.bare_op() == "IF"]
+    assert len(span_guards) == 8  # four read guards and four write guards
+    assert all(node.ops[0].bare_op() == "CMP_UGT" for node in span_guards)
+
+
+def test_register_bitfield_wraps_with_rotates_and_bfffo_scans_the_selected_width() -> None:
+    changed = _lift_to_llil(b"\xea\xc0\x00\x08", arch_cls=m68k_arch.M68020)
+    first_one = _lift_to_llil(b"\xed\xc0\x10\x08", arch_cls=m68k_arch.M68020)
+
+    changed_ops = [node.bare_op() for node in changed]
+    assert "LOAD" not in changed_ops and "STORE" not in changed_ops
+    assert any(
+        isinstance(operand, MockLLIL) and operand.bare_op() == "ROL"
+        for node in changed
+        for operand in node.ops
+    )
+    result_write = next(
+        node
+        for node in first_one
+        if node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "d1"
+    )
+    assert result_write.ops[1].bare_op() == "ADD"
+    assert sum(
+        1
+        for node in first_one
+        for operand in node.ops
+        if isinstance(operand, MockLLIL) and operand.bare_op() == "SUB"
+    ) >= 1
+
+
+def test_callm_resolves_the_module_entry_and_logs_unrepresented_module_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    nodes = _lift_to_llil(b"\x06\xd0\x00\x03", start_addr=0x1000, arch_cls=m68k_arch.M68020)
+
+    assert [node.bare_op() for node in nodes] == ["SET_REG", "CALL"]
+    target = nodes[1].ops[0]
+    assert target.bare_op() == "ADD"
+    assert target.ops[0].bare_op() == "LOAD"
+    assert target.ops[0].ops[0].ops[1].ops[0] == 4
+    assert target.ops[1].ops[0] == 2
+    assert caplog.messages == [
+        "M68020 LLIL at 0x1000: CALLM #3,(a0) resolves the descriptor entry point; "
+        "module-stack and external access-level changes are represented by call side effects"
+    ]
+
+
+def test_rtm_restores_module_frame_state_and_returns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    nodes = _lift_to_llil(b"\x06\xc0", start_addr=0x1000, arch_cls=m68k_arch.M68020)
+
+    assert all(node.bare_op() != "UNIMPL" for node in nodes)
+    d0_write = next(
+        node
+        for node in nodes
+        if node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "d0"
+    )
+    assert d0_write.ops[1].bare_op() == "LOAD"
+    assert d0_write.ops[1].ops[0].ops[1].ops[0] == 0x10
+    assert any(
+        node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "sp"
+        for node in nodes
+    )
+    assert nodes[-1].bare_op() == "RET"
+    assert caplog.messages == [
+        "M68020 LLIL at 0x1000: RTM restores the architectural module frame; "
+        "external access-level validation is not represented in LLIL"
+    ]
+
+
+def test_cpush_is_an_explicit_value_level_noop_with_debug_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m68k.logging")
+
+    nodes = _lift_to_llil(b"\xf4\x28", start_addr=0x1000, arch_cls=m68k_arch.M68040)
+
+    assert [node.bare_op() for node in nodes] == ["NOP"]
+    assert caplog.messages == [
+        "M68040 LLIL at 0x1000: CPUSH cache state has no architectural value-level LLIL effect"
+    ]
+
+
+@pytest.mark.parametrize(
+    "arch_cls, expected_formats",
+    [
+        (m68k_arch.M68010, [0, 8]),
+        (m68k_arch.M68020, [0, 1, 2, 9, 10, 11]),
+        (m68k_arch.M68040, [0, 1, 2, 3, 4, 7]),
+        (m68k_arch.M68330, [0, 1, 2, 12]),
+    ],
+)
+def test_rte_uses_cpu_specific_frame_formats(arch_cls: type, expected_formats: list[int]) -> None:
+    nodes = _lift_to_llil(b"\x4e\x73", arch_cls=arch_cls)
+    conditions = [node.ops[0] for node in nodes if node.bare_op() == "IF"]
+
+    assert [condition.ops[1].ops[0] for condition in conditions] == expected_formats
+    assert nodes[-1].bare_op() == "RET"
+
+
+@pytest.mark.parametrize(
+    "arch_cls, expected_mask",
+    [
+        (m68k_arch.M68000, 0xA71F),
+        (m68k_arch.M68020, 0xF71F),
+        (m68k_arch.M68330, 0xE71F),
+    ],
+)
+def test_status_register_writes_mask_reserved_bits(arch_cls: type, expected_mask: int) -> None:
+    nodes = _lift_to_llil(b"\x4e\x72\xff\xff", arch_cls=arch_cls)
+    sr_write = nodes[1]
+
+    assert sr_write.op == "SET_REG.w"
+    assert sr_write.ops[1].bare_op() == "AND"
+    assert sr_write.ops[1].ops[1].ops[0] == expected_mask
+
+
+def test_ccr_reads_and_writes_cannot_leak_reserved_bits() -> None:
+    write_nodes = _lift_to_llil(b"\x44\xfc\x00\xe0")
+    read_nodes = _lift_to_llil(b"\x40\xc0")  # MOVE SR,D0
+
+    assert write_nodes[1].ops[1].ops[1].ops[0] == 0x1f
+    composed_sr = read_nodes[0].ops[1]
+    assert composed_sr.bare_op() == "OR"
+    assert composed_sr.ops[0].ops[1].ops[0] == 0xA700
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x50\xd8", m68k_arch.M68000),  # ST.B (A0)+
+        (b"\x0c\xd8\x00\x40", m68k_arch.M68020),  # CAS.W D0,D1,(A0)+
+    ],
+)
+def test_internal_joins_cannot_bypass_postincrement(data: bytes, arch_cls: type) -> None:
+    arch = arch_cls()
+    il = lowlevelil.LowLevelILFunction(arch)
+    il.current_address = 0x1000  # type: ignore[attr-defined]
+    length = arch.disasm.decode_instruction(data, 0x1000)[1]
+    next_label = il.register_label_for_address(0x1000 + length)  # type: ignore[attr-defined]
+
+    assert arch.get_instruction_low_level_il(data, 0x1000, il) == length
+    nodes = [node for node in il if not isinstance(node, MockLabel)]
+    gotos = [node for node in nodes if node.bare_op() == "GOTO"]
+
+    assert gotos
+    assert all(node.ops[0] is not next_label for node in gotos)
+    assert nodes[-1].bare_op() == "SET_REG"
+    assert getattr(nodes[-1].ops[0], "name", None) == "a0"
+
+
+@pytest.mark.parametrize("data", [b"\x80\xd8", b"\x41\x98"])
+def test_trapping_source_postincrement_happens_before_internal_control_flow(
+    data: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        m68k_arch.M68000,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+    monkeypatch.setattr(
+        m68k_arch.M68000,
+        "_division_result_il",
+        staticmethod(
+            lambda il, size, dividend, divisor, signed: (
+                il.const(size, 0),
+                il.const(size, 0),
+            )
+        ),
+    )
+    nodes = _lift_to_llil(data)
+
+    assert getattr(nodes[0].ops[0], "name", None) == "TEMP100"
+    assert nodes[0].ops[1].bare_op() == "LOAD"
+    assert getattr(nodes[1].ops[0], "name", None) == "a0"
+    first_branch = next(i for i, node in enumerate(nodes) if node.bare_op() == "IF")
+    assert first_branch > 1
+    trap = next(i for i, node in enumerate(nodes) if node.bare_op() == "UNIMPL")
+    assert trap > 1
+
+
+@pytest.mark.parametrize(
+    "data, branch_selector",
+    [
+        (b"\x60\x04", lambda nodes: nodes[0].ops[0]),  # BRA.S
+        (b"\x66\x04", lambda nodes: nodes[0].ops[1]),  # BNE.S true edge
+        (b"\x51\xc8\x00\x04", lambda nodes: [n for n in nodes if n.bare_op() == "IF"][1].ops[2]),
+    ],
+)
+def test_pc_relative_label_probing_keeps_the_real_current_address(
+    data: bytes, branch_selector: Any
+) -> None:
+    arch = m68k_arch.M68000()
+    il = lowlevelil.LowLevelILFunction(arch)
+    il.current_address = 0x1000  # type: ignore[attr-defined]
+    target = 0x1006 if len(data) == 2 else 0x1006
+    target_label = il.register_label_for_address(target)  # type: ignore[attr-defined]
+
+    arch.get_instruction_low_level_il(data, 0x1000, il)
+    nodes = [node for node in il if not isinstance(node, MockLabel)]
+
+    assert branch_selector(nodes) is target_label

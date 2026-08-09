@@ -212,6 +212,10 @@ def dump(obj):
 # Operands
 
 class Operand:
+    # Preserve the encoded addressing-mode provenance even when a full
+    # extension suppresses the PC base register from the address expression.
+    pc_relative = False
+
     def format(self, addr: int) -> List[InstructionTextToken]:
         raise NotImplementedError
 
@@ -620,6 +624,7 @@ class OpRegisterIndirectIndex(Operand):
         self.ireg_long = ireg_long
         self.scale = scale
         self.pc_offset = pc_offset
+        self.pc_relative = reg == 'pc'
 
     def __repr__(self):
         return "OpRegisterIndirectIndex(%d, %s, 0x%x, %s, %d, %d)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale)
@@ -676,7 +681,7 @@ class OpRegisterIndirectIndex(Operand):
         return il.load(1 << self.size, self.get_address_il(il))
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
-        if self.reg == 'pc':
+        if self.pc_relative:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
@@ -690,6 +695,7 @@ class OpMemoryIndirect(Operand):
         self.offset = offset
         self.outer_displacement = outer_displacement
         self.pc_offset = pc_offset
+        self.pc_relative = reg == 'pc'
 
     def __repr__(self):
         return "OpMemoryIndirect(%d, %s, %d, %d)" % (self.size, self.reg, self.offset, self.outer_displacement)
@@ -742,7 +748,7 @@ class OpMemoryIndirect(Operand):
         return il.load(1 << self.size, self.get_address_il(il))
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
-        if self.reg == 'pc':
+        if self.pc_relative:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
@@ -759,6 +765,7 @@ class OpMemoryIndirectPostindex(Operand):
         self.scale = scale
         self.outer_displacement = outer_displacement
         self.pc_offset = pc_offset
+        self.pc_relative = reg == 'pc'
 
     def __repr__(self):
         return "OpMemoryIndirectPostindex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
@@ -829,7 +836,7 @@ class OpMemoryIndirectPostindex(Operand):
         return il.load(1 << self.size, self.get_address_il(il))
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
-        if self.reg == 'pc':
+        if self.pc_relative:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
@@ -846,6 +853,7 @@ class OpMemoryIndirectPreindex(Operand):
         self.scale = scale
         self.outer_displacement = outer_displacement
         self.pc_offset = pc_offset
+        self.pc_relative = reg == 'pc'
 
     def __repr__(self):
         return "OpMemoryIndirectPreindex(%d, %s, 0x%x, %s, %d, %d, 0x%x)" % (self.size, self.reg, self.offset, self.ireg, self.ireg_long, self.scale, self.outer_displacement)
@@ -916,7 +924,7 @@ class OpMemoryIndirectPreindex(Operand):
         return il.load(1 << self.size, self.get_address_il(il))
 
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
-        if self.reg == 'pc':
+        if self.pc_relative:
             return il.unimplemented()
         else:
             #return il.store(1 << self.size, self.get_address_il(il), value, flags)
@@ -966,6 +974,47 @@ class OpAbsolute(Operand):
     def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> ExpressionIndex:
         #return il.store(1 << self.size, self.get_address_il(il), value, flags)
         return il.expr(LowLevelILOperation.LLIL_STORE, self.get_address_il(il), value, size=1 << self.size, flags=flags)
+
+
+class OpBitField(Operand):
+    """An effective address decorated with a bit-field offset and width."""
+
+    def __init__(self, operand: Operand, offset, width):
+        self.operand = operand
+        self.offset = offset
+        self.width = width
+        self.size = operand.size
+        self.pc_relative = operand.pc_relative
+
+    @staticmethod
+    def _field_token(value):
+        if isinstance(value, str):
+            return InstructionTextToken(InstructionTextTokenType.RegisterToken, value)
+        return InstructionTextToken(InstructionTextTokenType.IntegerToken, str(value), value)
+
+    def format(self, addr: int) -> List[InstructionTextToken]:
+        return self.operand.format(addr) + [
+            InstructionTextToken(InstructionTextTokenType.TextToken, "{"),
+            self._field_token(self.offset),
+            InstructionTextToken(InstructionTextTokenType.OperandSeparatorToken, ":"),
+            self._field_token(self.width),
+            InstructionTextToken(InstructionTextTokenType.TextToken, "}"),
+        ]
+
+    def get_pre_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        return self.operand.get_pre_il(il)
+
+    def get_post_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        return self.operand.get_post_il(il)
+
+    def get_address_il2(self, il: LowLevelILFunction) -> Tuple[Optional[ExpressionIndex], List[ExpressionIndex]]:
+        return self.operand.get_address_il2(il)
+
+    def get_source_il(self, il: LowLevelILFunction) -> Optional[ExpressionIndex]:
+        return self.operand.get_source_il(il)
+
+    def get_dest_il(self, il: LowLevelILFunction, value, flags=0) -> Optional[ExpressionIndex]:
+        return self.operand.get_dest_il(il, value, flags)
 
 
 class OpImmediate(Operand):

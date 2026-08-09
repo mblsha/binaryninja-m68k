@@ -170,14 +170,24 @@ def test_cas2_debug_log_includes_lifting_context(caplog: pytest.LogCaptureFixtur
                     [
                         mreg("d0"),
                         mllil(
-                            "MUL.d{nzvc}",
+                            "MUL.d",
                             [
                                 mllil("ZX.d", [mllil("REG.w", [mreg("d1")])]),
                                 mllil("ZX.d", [mllil("REG.w", [mreg("d0")])]),
                             ],
                         ),
                     ],
-                )
+                ),
+                mllil(
+                    "SET_FLAG",
+                    [MockFlag("n"), mllil("CMP_SLT.d", [mllil("REG.d", [mreg("d0")]), mllil("CONST.d", [0])])],
+                ),
+                mllil(
+                    "SET_FLAG",
+                    [MockFlag("z"), mllil("CMP_E.d", [mllil("REG.d", [mreg("d0")]), mllil("CONST.d", [0])])],
+                ),
+                mllil("SET_FLAG", [MockFlag("v"), mllil("CONST.b", [0])]),
+                mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [0])]),
             ],
         ),
         (
@@ -189,14 +199,24 @@ def test_cas2_debug_log_includes_lifting_context(caplog: pytest.LogCaptureFixtur
                     [
                         mreg("d0"),
                         mllil(
-                            "MUL.d{nzvc}",
+                            "MUL.d",
                             [
                                 mllil("SX.d", [mllil("REG.w", [mreg("d1")])]),
                                 mllil("SX.d", [mllil("REG.w", [mreg("d0")])]),
                             ],
                         ),
                     ],
-                )
+                ),
+                mllil(
+                    "SET_FLAG",
+                    [MockFlag("n"), mllil("CMP_SLT.d", [mllil("REG.d", [mreg("d0")]), mllil("CONST.d", [0])])],
+                ),
+                mllil(
+                    "SET_FLAG",
+                    [MockFlag("z"), mllil("CMP_E.d", [mllil("REG.d", [mreg("d0")]), mllil("CONST.d", [0])])],
+                ),
+                mllil("SET_FLAG", [MockFlag("v"), mllil("CONST.b", [0])]),
+                mllil("SET_FLAG", [MockFlag("c"), mllil("CONST.b", [0])]),
             ],
         ),
         (
@@ -316,6 +336,50 @@ def test_stop_updates_sr_and_keeps_the_interrupt_resume_path() -> None:
 )
 def test_decoder_rejects_illegal_effective_addresses(data: bytes, arch_cls: type) -> None:
     assert arch_cls().disasm.decode_instruction(data, 0x1000)[:2] == ("unimplemented", 2)
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x40\xc8", m68k_arch.M68000),  # MOVE SR,A0
+        (b"\x40\xfa\x00\x00", m68k_arch.M68000),  # MOVE SR,(PC)
+        (b"\x40\xfc\x00\x00", m68k_arch.M68000),  # MOVE SR,#0
+        (b"\x44\xc8", m68k_arch.M68010),  # MOVE A0,CCR
+        (b"\x46\xc8", m68k_arch.M68000),  # MOVE A0,SR
+        (b"\x4a\x08", m68k_arch.M68020),  # TST.B A0
+        (b"\x4a\x48", m68k_arch.M68000),  # TST.W A0 before 68020
+        (b"\x4a\x3a\x00\x00", m68k_arch.M68000),  # TST.B (PC) before 68020
+        (b"\x48\x98\x00\x01", m68k_arch.M68000),  # MOVEM store via postincrement
+        (b"\x48\x88\x00\x01", m68k_arch.M68000),  # MOVEM store via An direct
+        (b"\x4c\xa0\x00\x01", m68k_arch.M68000),  # MOVEM load via predecrement
+        (b"\x00\xc0\x00\x00", m68k_arch.M68020),  # CMP2.B D0,D0
+        (b"\xb0\x08", m68k_arch.M68000),  # CMP.B A0,D0
+        (b"\x17\xc1\x01\x90", m68k_arch.M68020),  # MOVE.B D1,PC-full-EA with base suppressed
+    ],
+)
+def test_decoder_rejects_audited_illegal_effective_addresses(
+    data: bytes, arch_cls: type
+) -> None:
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[0] == "unimplemented"
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls, expected_instr",
+    [
+        (b"\xd0\x48", m68k_arch.M68000, "add"),  # ADD.W A0,D0
+        (b"\x90\x48", m68k_arch.M68000, "sub"),  # SUB.W A0,D0
+        (b"\xb0\x48", m68k_arch.M68000, "cmp"),  # CMP.W A0,D0
+        (b"\x01\x3c\x00\x00", m68k_arch.M68000, "btst"),  # BTST D0,#0
+        (b"\x0c\x3a\x00\x00\x00\x00", m68k_arch.M68020, "cmpi"),  # CMPI.B #0,(PC)
+        (b"\x4a\x48", m68k_arch.M68020, "tst"),  # TST.W A0 on 68020+
+        (b"\x4a\x48", m68k_arch.M68330, "tst"),  # TST.W A0 on CPU32
+        (b"\x4a\x3a\x00\x00", m68k_arch.M68020, "tst"),  # TST.B (PC) on 68020+
+    ],
+)
+def test_decoder_accepts_audited_effective_address_exceptions(
+    data: bytes, arch_cls: type, expected_instr: str
+) -> None:
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[0] == expected_instr
 
 
 def test_decoder_handles_truncated_extension_words_without_exceptions() -> None:
@@ -560,6 +624,7 @@ def test_newer_cpu_rte_does_not_assume_a_68000_exception_frame(
 def test_decoder_enforces_cpu_generation_and_instruction_length() -> None:
     m68000 = m68k_arch.M68000()
     m68020 = m68k_arch.M68020()
+    cpu32 = m68k_arch.M68330()
 
     cas2 = b"\x0c\xfc\x80\x80\x90\xc1"
     assert m68000.disasm.decode_instruction(cas2, 0x1000)[:2] == ("unimplemented", 2)
@@ -568,21 +633,92 @@ def test_decoder_enforces_cpu_generation_and_instruction_length() -> None:
     long_branch = b"\x60\xff\x00\x00\x00\x04"
     assert m68000.disasm.decode_instruction(long_branch, 0x1000)[1] == 2
     assert m68020.disasm.decode_instruction(long_branch, 0x1000)[1] == 6
+    assert cpu32.disasm.decode_instruction(long_branch, 0x1000)[1] == 6
+
+    assert cpu32.disasm.decode_instruction(b"\x41\x00", 0x1000)[0] == "unimplemented"
 
     invalid = b"\xa0\x00" + bytes(20)
     assert m68000.disasm.decode_instruction(invalid, 0x1000)[:2] == ("unimplemented", 2)
 
 
-def test_decoder_rejects_reserved_and_cpu32_full_extensions() -> None:
+def test_decoder_rejects_reserved_full_extensions_and_accepts_cpu32_full_format() -> None:
     m68020 = m68k_arch.M68020()
     cpu32 = m68k_arch.M68330()
 
     valid_full_extension = b"\x11\x10"
     assert m68020.disasm.decode_effective_address(6, 0, valid_full_extension, 2)[0] is not None
-    assert cpu32.disasm.decode_effective_address(6, 0, valid_full_extension, 2) == (None, None)
+    assert cpu32.disasm.decode_effective_address(6, 0, valid_full_extension, 2)[0] is not None
 
     for reserved_extension in (b"\x11\x00", b"\x11\x14", b"\x11\x54"):
         assert m68020.disasm.decode_effective_address(6, 0, reserved_extension, 2) == (None, None)
+
+    # With base/index/BD suppressed, a non-null outer displacement is still
+    # an active full-format address element.
+    assert m68020.disasm.decode_instruction(b"\x43\xf0\x01\xd2\x00\x04", 0x1000)[:2] == (
+        "lea",
+        6,
+    )
+
+
+@pytest.mark.parametrize(
+    "data, arch_cls",
+    [
+        (b"\x71\x00", m68k_arch.M68000),  # reserved MOVEQ bit 8
+        (b"\x4c\x80", m68k_arch.M68020),  # wrong-direction pseudo EXT.W
+        (b"\x4c\xc0", m68k_arch.M68020),  # wrong-direction pseudo EXT.L
+        (b"\x02\xd0\x90\x01", m68k_arch.M68020),  # CHK2/CMP2 reserved extension bit
+        (b"\x0c\xd0\x02\x40", m68k_arch.M68020),  # CAS reserved extension bit
+        (b"\x0c\xfc\x82\x80\x90\xc1", m68k_arch.M68020),  # CAS2 reserved extension bit
+        (b"\x4c\x02\x06\x01", m68k_arch.M68020),  # long MUL reserved extension bit
+        (b"\x4c\x42\x06\x01", m68k_arch.M68020),  # long DIV reserved extension bit
+        (b"\x0e\x50\x08\x01", m68k_arch.M68020),  # MOVES reserved extension bit
+        (b"\x06\xd0\x01\x01", m68k_arch.M68020),  # CALLM reserved extension byte
+    ],
+)
+def test_decoder_rejects_reserved_opcode_and_extension_bits(data: bytes, arch_cls: type) -> None:
+    assert arch_cls().disasm.decode_instruction(data, 0x1000)[0] == "unimplemented"
+
+
+def test_bitfield_decoder_consumes_the_ea_and_exposes_the_operand() -> None:
+    decoded = m68k_arch.M68020().disasm.decode_instruction(b"\xe8\xf0\x00\x00\x00\x00", 0x1000)
+
+    assert decoded[:2] == ("bftst", 6)
+    assert decoded[4] is not None
+    assert _disasm(b"\xe8\xf0\x00\x00\x00\x00", arch_cls=m68k_arch.M68020) == (
+        "bftst     (a0,d0.w){0:32}"
+    )
+    assert [node.bare_op() for node in _lift_to_llil(
+        b"\xe8\xf0\x00\x00\x00\x00", arch_cls=m68k_arch.M68020
+    )] == ["UNIMPL"]
+
+
+def test_long_multiply_writes_explicit_flags_from_the_architectural_result() -> None:
+    single = _lift_to_llil(b"\x4c\x02\x00\x00", arch_cls=m68k_arch.M68020)
+    pair = _lift_to_llil(b"\x4c\x02\x04\x01", arch_cls=m68k_arch.M68020)
+
+    single_flags = [node for node in single if node.bare_op() == "SET_FLAG"]
+    assert [getattr(node.ops[0], "name", None) for node in single_flags] == ["n", "z", "v", "c"]
+    assert single_flags[2].ops[1].bare_op() == "CMP_NE"
+    assert [
+        getattr(node.ops[0], "name", None)
+        for node in pair
+        if node.bare_op() == "SET_REG" and not getattr(node.ops[0], "name", "").startswith("TEMP")
+    ] == ["d1", "d0"]
+    pair_flags = [node for node in pair if node.bare_op() == "SET_FLAG"]
+    assert [getattr(node.ops[0], "name", None) for node in pair_flags] == ["n", "z", "v", "c"]
+    assert pair_flags[2].ops[1].ops[0] == 0
+
+
+def test_bgnd_is_not_lifted_as_an_ordinary_nop(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        m68k_arch.M68330,
+        "_system_call_il",
+        staticmethod(lambda il: il.unimplemented()),
+    )
+
+    assert [node.bare_op() for node in _lift_to_llil(
+        b"\x4a\xfa", arch_cls=m68k_arch.M68330
+    )] == ["UNIMPL"]
 
 
 def test_cmp2_register_comes_from_extension_word() -> None:

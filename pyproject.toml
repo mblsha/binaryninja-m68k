@@ -12,7 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-  "binja-test-mocks>=0.1.10",
+  "binja-test-mocks>=0.1.11",
   "pytest>=7.0.0",
   "ruff>=0.1.0",
 ]

@@ -217,11 +217,214 @@ class M68000(Architecture):
     memory_indirect = False
     movem_store_decremented = False
     rts_pass_flags = False
+    isa_level = 0
+    cpu32 = False
 
     def __init__(self):
         Architecture.__init__(self)
-        self.disasm = M68KDisasm(self.address_size, self.control_registers)
+        self.disasm = M68KDisasm(
+            self.address_size,
+            self.control_registers,
+            isa_level=self.isa_level,
+            memory_indirect=self.memory_indirect,
+            cpu32=self.cpu32,
+        )
         self.rts_pass_flags = RTS_PASS_FLAGS_BY_ARCH.get(self.name, False)
+
+    @staticmethod
+    def _extend_il(
+        il: LowLevelILFunction,
+        size: int,
+        value: ExpressionIndex,
+        signed: bool,
+        flags=0,
+    ) -> ExpressionIndex:
+        operation = LowLevelILOperation.LLIL_SX if signed else LowLevelILOperation.LLIL_ZX
+        return il.expr(operation, value, size=size, flags=flags)
+
+    def _write_status_register_il(self, il: LowLevelILFunction, value: ExpressionIndex, write_sr: bool) -> None:
+        register = 'sr' if write_sr else 'ccr'
+        # All architectural writes provide a word, including MOVE/RTR to CCR.
+        # Preserve that width while evaluating the value once, then select the
+        # low byte for CCR and the individual condition-code flags below.
+        il.append(il.set_reg(2, LLIL_TEMP(7), value))
+        register_size = 2 if write_sr else 1
+        il.append(il.set_reg(register_size, register, il.reg(register_size, LLIL_TEMP(7))))
+
+        flag_masks = {'c': 0x01, 'v': 0x02, 'z': 0x04, 'n': 0x08, 'x': 0x10}
+        for flag, mask in flag_masks.items():
+            il.append(
+                il.set_flag(
+                    flag,
+                    il.compare_not_equal(
+                        1,
+                        il.and_expr(1, il.reg(1, LLIL_TEMP(7)), il.const(1, mask)),
+                        il.const(1, 0),
+                    ),
+                )
+            )
+
+    def _lift_word_division(
+        self,
+        il: LowLevelILFunction,
+        source: Operand,
+        dest: OpRegisterDirect,
+        length: int,
+        signed: bool,
+    ) -> None:
+        skip_label_found = True
+        skip = il.get_label_for_address(il.arch, il.current_address + length)
+        if skip is None:
+            skip = LowLevelILLabel()
+            skip_label_found = False
+
+        divide = LowLevelILLabel()
+        divide_by_zero = LowLevelILLabel()
+        overflow = LowLevelILLabel()
+        store_result = LowLevelILLabel()
+
+        il.append(il.set_reg(4, LLIL_TEMP(0), il.reg(4, dest.reg)))
+        il.append(
+            il.set_reg(
+                4,
+                LLIL_TEMP(1),
+                self._extend_il(il, 4, source.get_source_il(il), signed=signed),
+            )
+        )
+        il.append(
+            il.if_expr(
+                il.compare_equal(4, il.reg(4, LLIL_TEMP(1)), il.const(4, 0)),
+                divide_by_zero,
+                divide,
+            )
+        )
+
+        il.mark_label(divide_by_zero)
+        il.append(il.system_call())
+        il.append(il.goto(skip))
+
+        il.mark_label(divide)
+        if signed:
+            quotient = il.div_signed(4, il.reg(4, LLIL_TEMP(0)), il.reg(4, LLIL_TEMP(1)))
+            remainder = il.mod_signed(4, il.reg(4, LLIL_TEMP(0)), il.reg(4, LLIL_TEMP(1)))
+        else:
+            quotient = il.div_unsigned(4, il.reg(4, LLIL_TEMP(0)), il.reg(4, LLIL_TEMP(1)))
+            remainder = il.mod_unsigned(4, il.reg(4, LLIL_TEMP(0)), il.reg(4, LLIL_TEMP(1)))
+        il.append(il.set_reg(4, LLIL_TEMP(2), quotient))
+        il.append(il.set_reg(4, LLIL_TEMP(3), remainder))
+
+        if signed:
+            overflow_condition = il.or_expr(
+                1,
+                il.compare_signed_less_than(4, il.reg(4, LLIL_TEMP(2)), il.const(4, -0x8000)),
+                il.compare_signed_greater_than(4, il.reg(4, LLIL_TEMP(2)), il.const(4, 0x7fff)),
+            )
+        else:
+            overflow_condition = il.compare_unsigned_greater_than(
+                4, il.reg(4, LLIL_TEMP(2)), il.const(4, 0xffff)
+            )
+        il.append(il.if_expr(overflow_condition, overflow, store_result))
+
+        il.mark_label(overflow)
+        il.append(il.set_flag('v', il.const(1, 1)))
+        il.append(il.set_flag('c', il.const(1, 0)))
+        il.append(il.goto(skip))
+
+        il.mark_label(store_result)
+        il.append(
+            il.set_reg(
+                4,
+                dest.reg,
+                il.or_expr(
+                    4,
+                    il.shift_left(
+                        4,
+                        il.and_expr(4, il.reg(4, LLIL_TEMP(3)), il.const(4, 0xffff)),
+                        il.const(1, 16),
+                    ),
+                    il.and_expr(4, il.reg(4, LLIL_TEMP(2)), il.const(4, 0xffff)),
+                ),
+            )
+        )
+        il.append(
+            il.set_flag(
+                'n',
+                il.compare_signed_less_than(2, il.reg(2, LLIL_TEMP(2)), il.const(2, 0)),
+            )
+        )
+        il.append(il.set_flag('z', il.compare_equal(2, il.reg(2, LLIL_TEMP(2)), il.const(2, 0))))
+        il.append(il.set_flag('v', il.const(1, 0)))
+        il.append(il.set_flag('c', il.const(1, 0)))
+        il.append(il.goto(skip))
+
+        if not skip_label_found:
+            il.mark_label(skip)
+
+    def _lift_bound_check(
+        self,
+        il: LowLevelILFunction,
+        source: Operand,
+        dest: OpRegisterDirect,
+        size_bytes: int,
+        length: int,
+        trap_on_failure: bool,
+    ) -> None:
+        compare_size = 4 if dest.reg.startswith('a') or dest.reg == 'sp' else size_bytes
+        signed = compare_size == 4 and (dest.reg.startswith('a') or dest.reg == 'sp')
+
+        il.append(il.set_reg(4, LLIL_TEMP(0), source.get_address_il(il)))
+        lower = il.load(size_bytes, il.reg(4, LLIL_TEMP(0)))
+        upper = il.load(
+            size_bytes,
+            il.add(4, il.reg(4, LLIL_TEMP(0)), il.const(4, size_bytes)),
+        )
+        if compare_size != size_bytes:
+            lower = self._extend_il(il, compare_size, lower, signed=True)
+            upper = self._extend_il(il, compare_size, upper, signed=True)
+
+        il.append(il.set_reg(compare_size, LLIL_TEMP(1), lower))
+        il.append(il.set_reg(compare_size, LLIL_TEMP(2), upper))
+        value = il.reg(4, dest.reg) if compare_size == 4 else dest.get_source_il(il)
+        il.append(il.set_reg(compare_size, LLIL_TEMP(3), value))
+
+        equal_to_bound = il.or_expr(
+            1,
+            il.compare_equal(compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(1))),
+            il.compare_equal(compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(2))),
+        )
+        if signed:
+            below_lower = il.compare_signed_less_than(
+                compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(1))
+            )
+            above_upper = il.compare_signed_greater_than(
+                compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(2))
+            )
+        else:
+            below_lower = il.compare_unsigned_less_than(
+                compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(1))
+            )
+            above_upper = il.compare_unsigned_greater_than(
+                compare_size, il.reg(compare_size, LLIL_TEMP(3)), il.reg(compare_size, LLIL_TEMP(2))
+            )
+        out_of_bounds = il.or_expr(1, below_lower, above_upper)
+        il.append(il.set_flag('z', equal_to_bound))
+        il.append(il.set_flag('c', out_of_bounds))
+
+        if not trap_on_failure:
+            return
+
+        skip_label_found = True
+        skip = il.get_label_for_address(il.arch, il.current_address + length)
+        if skip is None:
+            skip = LowLevelILLabel()
+            skip_label_found = False
+        trap = LowLevelILLabel()
+        il.append(il.if_expr(out_of_bounds, trap, skip))
+        il.mark_label(trap)
+        il.append(il.system_call())
+        il.append(il.goto(skip))
+        if not skip_label_found:
+            il.mark_label(skip)
 
     def generate_instruction_il(self, il: LowLevelILFunction, instr: str, length: int, size: int, source: Optional[Operand], dest: Optional[Operand], third: Optional[Operand]):
         size_bytes = None
@@ -230,12 +433,7 @@ class M68000(Architecture):
 
         if instr in ('move', 'moveq'):
             if instr == 'move' and isinstance(dest, OpRegisterDirect) and dest.reg in ('ccr', 'sr'):
-                il.append(il.set_reg(1, LLIL_TEMP(0), source.get_source_il(il)))
-                il.append(il.set_flag('c', il.test_bit(1, il.reg(1, LLIL_TEMP(0)), il.const(1, 0x01))))
-                il.append(il.set_flag('v', il.test_bit(1, il.reg(1, LLIL_TEMP(0)), il.const(1, 0x02))))
-                il.append(il.set_flag('z', il.test_bit(1, il.reg(1, LLIL_TEMP(0)), il.const(1, 0x04))))
-                il.append(il.set_flag('n', il.test_bit(1, il.reg(1, LLIL_TEMP(0)), il.const(1, 0x08))))
-                il.append(il.set_flag('x', il.test_bit(1, il.reg(1, LLIL_TEMP(0)), il.const(1, 0x10))))
+                self._write_status_register_il(il, source.get_source_il(il), dest.reg == 'sr')
             else:
                 flags = 'nzvc'
                 if ((isinstance(source, OpRegisterDirect) and source.reg in ('usp', 'ccr', 'sr')) or
@@ -248,119 +446,164 @@ class M68000(Architecture):
                         flags
                     )
                 )
-        elif instr in ('movea', 'movec'):
-            # dest.size = SIZE_LONG
-            # il.append(
-            #     dest.get_dest_il(il,
-            #         il.sign_extend(4,
-            #             source.get_source_il(il)
-            #         )
-            #     )
-            # )
-            il.append(
-                dest.get_dest_il(il,
-                    source.get_source_il(il)
-                )
-            )
+        elif instr == 'movea':
+            value = source.get_source_il(il)
+            if source.size == SIZE_WORD:
+                value = self._extend_il(il, 4, value, signed=True)
+            il.append(il.set_reg(4, dest.reg, value))
+        elif instr == 'movec':
+            il.append(dest.get_dest_il(il, source.get_source_il(il)))
         elif instr == 'clr':
             il.append(
                 dest.get_dest_il(il,
-                    il.const(4, 0),
+                    il.const(size_bytes, 0),
                     'nzvc'
                 )
             )
         elif instr in ('add', 'addi', 'addq'):
-            il.append(
-                dest.get_dest_il(il,
-                    il.add(size_bytes,
-                        dest.get_source_il(il),
-                        source.get_source_il(il),
-                        flags='*'
+            if instr == 'addq' and isinstance(dest, OpRegisterDirect) and (dest.reg.startswith('a') or dest.reg == 'sp'):
+                il.append(
+                    il.set_reg(
+                        4,
+                        dest.reg,
+                        il.add(4, il.reg(4, dest.reg), self._extend_il(il, 4, source.get_source_il(il), signed=False)),
                     )
                 )
-            )
+            else:
+                il.append(
+                    dest.get_dest_il(il,
+                        il.add(size_bytes,
+                            dest.get_source_il(il),
+                            source.get_source_il(il),
+                            flags='*'
+                        )
+                    )
+                )
         elif instr == 'adda':
             dest.size = SIZE_LONG
             il.append(
                 dest.get_dest_il(il,
                     il.add(4,
                         dest.get_source_il(il),
-                        il.sign_extend(4,
-                            source.get_source_il(il)
-                        )
+                        self._extend_il(il, 4, source.get_source_il(il), signed=True)
                     )
                 )
             )
         elif instr == 'addx':
+            il.append(il.set_reg(1, LLIL_TEMP(0), il.flag('z')))
+            result = il.expr(
+                LowLevelILOperation.LLIL_ADC,
+                dest.get_source_il(il),
+                source.get_source_il(il),
+                il.flag('x'),
+                size=size_bytes,
+                flags='*',
+            )
+            il.append(il.set_reg(size_bytes, LLIL_TEMP(1), result))
+            il.append(dest.get_dest_il(il, il.reg(size_bytes, LLIL_TEMP(1))))
             il.append(
-                dest.get_dest_il(il,
-                    il.add(size_bytes,
-                        il.add(size_bytes,
-                            dest.get_source_il(il),
-                            source.get_source_il(il),
-                            flags='*'
-                        ),
-                        il.flag('x'),
-                        flags='*'
-                    )
+                il.set_flag(
+                    'z',
+                    il.and_expr(
+                        1,
+                        il.reg(1, LLIL_TEMP(0)),
+                        il.compare_equal(size_bytes, il.reg(size_bytes, LLIL_TEMP(1)), il.const(size_bytes, 0)),
+                    ),
                 )
             )
         elif instr in ('sub', 'subi', 'subq'):
-            il.append(
-                dest.get_dest_il(il,
-                    il.sub(size_bytes,
-                        dest.get_source_il(il),
-                        source.get_source_il(il),
-                        flags='*'
+            if instr == 'subq' and isinstance(dest, OpRegisterDirect) and (dest.reg.startswith('a') or dest.reg == 'sp'):
+                il.append(
+                    il.set_reg(
+                        4,
+                        dest.reg,
+                        il.sub(4, il.reg(4, dest.reg), self._extend_il(il, 4, source.get_source_il(il), signed=False)),
                     )
                 )
-            )
+            else:
+                il.append(
+                    dest.get_dest_il(il,
+                        il.sub(size_bytes,
+                            dest.get_source_il(il),
+                            source.get_source_il(il),
+                            flags='*'
+                        )
+                    )
+                )
         elif instr == 'suba':
             dest.size = SIZE_LONG
             il.append(
                 dest.get_dest_il(il,
                     il.sub(4,
                         dest.get_source_il(il),
-                        il.sign_extend(4,
-                            source.get_source_il(il)
-                        )
+                        self._extend_il(il, 4, source.get_source_il(il), signed=True)
                     )
                 )
             )
         elif instr == 'subx':
+            il.append(il.set_reg(1, LLIL_TEMP(0), il.flag('z')))
+            result = il.expr(
+                LowLevelILOperation.LLIL_SBB,
+                dest.get_source_il(il),
+                source.get_source_il(il),
+                il.flag('x'),
+                size=size_bytes,
+                flags='*',
+            )
+            il.append(il.set_reg(size_bytes, LLIL_TEMP(1), result))
+            il.append(dest.get_dest_il(il, il.reg(size_bytes, LLIL_TEMP(1))))
             il.append(
-                dest.get_dest_il(il,
-                    il.sub(size_bytes,
-                        il.sub(size_bytes,
-                            dest.get_source_il(il),
-                            source.get_source_il(il),
-                            flags='*'
-                        ),
-                        il.flag('x'),
-                        flags='*'
-                    )
+                il.set_flag(
+                    'z',
+                    il.and_expr(
+                        1,
+                        il.reg(1, LLIL_TEMP(0)),
+                        il.compare_equal(size_bytes, il.reg(size_bytes, LLIL_TEMP(1)), il.const(size_bytes, 0)),
+                    ),
                 )
             )
         elif instr == 'neg':
+            il.append(il.set_reg(size_bytes, LLIL_TEMP(0), dest.get_source_il(il)))
             il.append(
                 dest.get_dest_il(il,
-                    il.neg_expr(size_bytes,
-                        dest.get_source_il(il),
-                        flags='*'
+                    il.expr(
+                        LowLevelILOperation.LLIL_NEG,
+                        il.reg(size_bytes, LLIL_TEMP(0)),
+                        size=size_bytes,
+                        flags='nzvc',
                     )
                 )
             )
-        elif instr == 'negx':
             il.append(
-                dest.get_dest_il(il,
-                    il.sub(size_bytes,
-                        il.neg_expr(size_bytes,
-                            dest.get_source_il(il),
-                            flags='*'
-                        ),
-                        il.flag('x'),
-                        flags='*'
-                    )
+                il.set_flag(
+                    'x',
+                    il.compare_not_equal(
+                        size_bytes,
+                        il.reg(size_bytes, LLIL_TEMP(0)),
+                        il.const(size_bytes, 0),
+                    ),
+                )
+            )
+        elif instr == 'negx':
+            il.append(il.set_reg(1, LLIL_TEMP(0), il.flag('z')))
+            result = il.expr(
+                LowLevelILOperation.LLIL_SBB,
+                il.const(size_bytes, 0),
+                dest.get_source_il(il),
+                il.flag('x'),
+                size=size_bytes,
+                flags='*',
+            )
+            il.append(il.set_reg(size_bytes, LLIL_TEMP(1), result))
+            il.append(dest.get_dest_il(il, il.reg(size_bytes, LLIL_TEMP(1))))
+            il.append(
+                il.set_flag(
+                    'z',
+                    il.and_expr(
+                        1,
+                        il.reg(1, LLIL_TEMP(0)),
+                        il.compare_equal(size_bytes, il.reg(size_bytes, LLIL_TEMP(1)), il.const(size_bytes, 0)),
+                    ),
                 )
             )
         elif instr == 'abcd':
@@ -427,6 +670,7 @@ class M68000(Architecture):
                 )
             )
         elif instr in ('muls', 'mulu'):
+            signed = instr == 'muls'
             if isinstance(dest, OpRegisterDirectPair):
                 source_text = "".join(token.text for token in source.format(il.current_address))
                 dest_text = "".join(token.text for token in dest.format(il.current_address))
@@ -438,38 +682,29 @@ class M68000(Architecture):
                     il.set_reg_split(4,
                         dest.reg1,
                         dest.reg2,
-                        il.mult(4,
-                            source.get_source_il(il),
-                            # FIXME
-                            dest.get_source_il(il)[0],
+                        il.mult(8,
+                            self._extend_il(il, 8, source.get_source_il(il), signed=signed),
+                            self._extend_il(il, 8, il.reg(4, dest.reg2), signed=signed),
                             flags='nzvc'
                         )
                     )
                 )
             else:
+                source_value = self._extend_il(il, 4, source.get_source_il(il), signed=signed)
+                dest_value = self._extend_il(il, 4, dest.get_source_il(il), signed=signed)
                 il.append(
                     il.set_reg(4,
                         dest.reg,
                         il.mult(4,
-                            source.get_source_il(il),
-                            dest.get_source_il(il),
+                            source_value,
+                            dest_value,
                             flags='nzvc'
                         )
                     )
                 )
         elif instr == 'divs':
             if size == 1:
-                dividend_il = dest.get_source_il(il)
-                divisor_il = source.get_source_il(il)
-                dest.size = SIZE_LONG
-                il.append(
-                    dest.get_dest_il(il,
-                        il.or_expr(4,
-                            il.shift_left(4, il.mod_signed(2, dividend_il, divisor_il), il.const(1, 16)),
-                            il.div_signed(2, dividend_il, divisor_il, flags='nzvc')
-                        )
-                    )
-                )
+                self._lift_word_division(il, source, dest, length, signed=True)
             elif isinstance(dest, OpRegisterDirect):
                 dividend_il = dest.get_source_il(il)
                 divisor_il = source.get_source_il(il)
@@ -516,17 +751,7 @@ class M68000(Architecture):
             )
         elif instr == 'divu':
             if size == 1:
-                dividend_il = dest.get_source_il(il)
-                divisor_il = source.get_source_il(il)
-                dest.size = SIZE_LONG
-                il.append(
-                    dest.get_dest_il(il,
-                        il.or_expr(4,
-                            il.shift_left(4, il.mod_unsigned(2, dividend_il, divisor_il), il.const(1, 16)),
-                            il.div_unsigned(2, dividend_il, divisor_il, flags='nzvc')
-                        )
-                    )
-                )
+                self._lift_word_division(il, source, dest, length, signed=False)
             elif isinstance(dest, OpRegisterDirect):
                 dividend_il = dest.get_source_il(il)
                 divisor_il = source.get_source_il(il)
@@ -704,7 +929,7 @@ class M68000(Architecture):
 
             il.append(
                 il.if_expr(
-                    il.compare_unsigned_less_than(size_bytes,
+                    il.compare_signed_less_than(size_bytes,
                         dest.get_source_il(il),
                         il.const(size_bytes, 0)
                     ),
@@ -717,7 +942,7 @@ class M68000(Architecture):
 
             il.append(
                 il.if_expr(
-                    il.compare_unsigned_greater_than(size_bytes,
+                    il.compare_signed_greater_than(size_bytes,
                         dest.get_source_il(il),
                         source.get_source_il(il)
                     ),
@@ -739,178 +964,50 @@ class M68000(Architecture):
             if not skip_label_found:
                 il.mark_label(skip)
         elif instr == 'chk2':
-            skip_label_found = True
-
-            skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-            if skip is None:
-                skip = LowLevelILLabel()
-                skip_label_found = False
-
-            trap = LowLevelILLabel()
-            check = LowLevelILLabel()
-
-            il.append(
-                il.set_reg(4,
-                    LLIL_TEMP(0),
-                    source.get_address_il(il)
-                )
+            self._lift_bound_check(il, source, dest, size_bytes, length, trap_on_failure=True)
+        elif instr in ('bchg', 'bclr', 'bset', 'btst'):
+            operand_size = 1 << dest.size
+            bit_number_il = il.and_expr(
+                1,
+                source.get_source_il(il),
+                il.const(1, operand_size * 8 - 1),
             )
-
+            bit_mask_il = il.shift_left(
+                operand_size,
+                il.const(operand_size, 1),
+                bit_number_il,
+            )
+            il.append(il.set_reg(operand_size, LLIL_TEMP(0), dest.get_source_il(il)))
             il.append(
-                il.if_expr(
-                    il.compare_unsigned_less_than(size_bytes,
-                        dest.get_source_il(il),
-                        il.load(size_bytes,
-                            il.reg(4, LLIL_TEMP(0))
-                        )
+                il.set_flag(
+                    'z',
+                    il.compare_equal(
+                        operand_size,
+                        il.and_expr(
+                            operand_size,
+                            il.reg(operand_size, LLIL_TEMP(0)),
+                            bit_mask_il,
+                        ),
+                        il.const(operand_size, 0),
                     ),
-                    trap,
-                    check
                 )
             )
 
-            il.mark_label(check)
+            if instr == 'bchg':
+                result = il.xor_expr(operand_size, il.reg(operand_size, LLIL_TEMP(0)), bit_mask_il)
+            elif instr == 'bclr':
+                result = il.and_expr(
+                    operand_size,
+                    il.reg(operand_size, LLIL_TEMP(0)),
+                    il.expr(LowLevelILOperation.LLIL_NOT, bit_mask_il, size=operand_size),
+                )
+            elif instr == 'bset':
+                result = il.or_expr(operand_size, il.reg(operand_size, LLIL_TEMP(0)), bit_mask_il)
+            else:
+                result = None
 
-            il.append(
-                il.if_expr(
-                    il.compare_unsigned_greater_than(size_bytes,
-                        dest.get_source_il(il),
-                        il.load(size_bytes,
-                            il.add(4,
-                                il.reg(4, LLIL_TEMP(0)),
-                                il.const(4, size_bytes)
-                            )
-                        )
-                    ),
-                    trap,
-                    skip
-                )
-            )
-
-            il.mark_label(trap)
-
-            il.append(
-                il.system_call()
-            )
-
-            il.append(
-                il.goto(skip)
-            )
-
-            if not skip_label_found:
-                il.mark_label(skip)
-        elif instr == 'bchg':
-            bit_number_il = il.mod_unsigned(1,
-                source.get_source_il(il),
-                il.const(1, 8 << dest.size)
-            )
-            il.append(
-                il.set_flag('z',
-                    il.compare_not_equal(4,
-                        il.test_bit(4,
-                            dest.get_source_il(il),
-                            il.shift_left(4,
-                                il.const(4, 1),
-                                bit_number_il
-                            )
-                        ),
-                        il.const(4, 0)
-                    )
-                )
-            )
-            il.append(
-                dest.get_dest_il(il,
-                    il.xor_expr(4,
-                        dest.get_source_il(il),
-                        il.shift_left(4,
-                            il.const(4, 1),
-                            bit_number_il
-                        )
-                    )
-                )
-            )
-        elif instr == 'bclr':
-            bit_number_il = il.mod_unsigned(1,
-                source.get_source_il(il),
-                il.const(1, 8 << dest.size)
-            )
-            il.append(
-                il.set_flag('z',
-                    il.compare_not_equal(4,
-                        il.test_bit(4,
-                            dest.get_source_il(il),
-                            il.shift_left(4,
-                                il.const(4, 1),
-                                bit_number_il
-                            )
-                        ),
-                        il.const(4, 0)
-                    )
-                )
-            )
-            il.append(
-                dest.get_dest_il(il,
-                    il.and_expr(4,
-                        dest.get_source_il(il),
-                        il.not_expr(4,
-                            il.shift_left(4,
-                                il.const(4, 1),
-                                bit_number_il
-                            )
-                        )
-                    )
-                )
-            )
-        elif instr == 'bset':
-            bit_number_il = il.mod_unsigned(1,
-                source.get_source_il(il),
-                il.const(1, 8 << dest.size)
-            )
-            il.append(
-                il.set_flag('z',
-                    il.compare_not_equal(4,
-                        il.test_bit(4,
-                            dest.get_source_il(il),
-                            il.shift_left(4,
-                                il.const(4, 1),
-                                bit_number_il
-                            )
-                        ),
-                        il.const(4, 0)
-                    )
-                )
-            )
-            il.append(
-                dest.get_dest_il(il,
-                    il.or_expr(4,
-                        dest.get_source_il(il),
-                        il.shift_left(4,
-                            il.const(4, 1),
-                            bit_number_il
-                        )
-                    )
-                )
-            )
-        elif instr == 'btst':
-            bit_number_il = il.mod_unsigned(1,
-                source.get_source_il(il),
-                il.const(1, 8 << dest.size)
-            )
-            il.append(
-                il.set_flag('z',
-                    il.compare_not_equal(4,
-                        il.test_bit(4,
-                            dest.get_source_il(il),
-                            il.shift_left(4,
-                                il.const(4, 1),
-                                bit_number_il
-                            )
-                        ),
-                        il.const(4, 0)
-                    )
-                )
-            )
+            if result is not None:
+                il.append(dest.get_dest_il(il, result))
         elif instr in ('asl', 'lsl'):
             source_il = il.const(1, 1)
             if source is not None:
@@ -959,7 +1056,7 @@ class M68000(Architecture):
                     il.rotate_left(size_bytes,
                         dest.get_source_il(il),
                         source_il,
-                        flags='*'
+                        flags='nzvc'
                     )
                 )
             )
@@ -972,7 +1069,7 @@ class M68000(Architecture):
                     il.rotate_right(size_bytes,
                         dest.get_source_il(il),
                         source_il,
-                        flags='*'
+                        flags='nzvc'
                     )
                 )
             )
@@ -1017,69 +1114,12 @@ class M68000(Architecture):
             il.append(
                 il.sub(4,
                     dest.get_source_il(il),
-                    il.sign_extend(4,
-                        source.get_source_il(il)
-                    ),
+                    self._extend_il(il, 4, source.get_source_il(il), signed=True),
                     flags='nzvc'
                 )
             )
         elif instr == 'cmp2':
-            skip_label_found = True
-
-            skip = il.get_label_for_address(il.arch, il.current_address+length)
-
-            if skip is None:
-                skip = LowLevelILLabel()
-                skip_label_found = False
-
-            check = LowLevelILLabel()
-
-            il.append(
-                il.set_reg(4,
-                    LLIL_TEMP(0),
-                    source.get_address_il(il)
-                )
-            )
-
-            il.append(
-                il.sub(size_bytes,
-                    dest.get_source_il(il),
-                    il.load(size_bytes,
-                        il.reg(4, LLIL_TEMP(0))
-                    ),
-                    flags='nzvc'
-                )
-            )
-
-            il.append(
-                il.if_expr(
-                    il.flag_condition(LowLevelILFlagCondition.LLFC_ULT),
-                    skip,
-                    check
-                )
-            )
-
-            il.mark_label(check)
-
-            il.append(
-                il.sub(size_bytes,
-                    dest.get_source_il(il),
-                    il.load(size_bytes,
-                        il.add(4,
-                            il.reg(4, LLIL_TEMP(0)),
-                            il.const(4, size_bytes)
-                        )
-                    ),
-                    flags='nzvc'
-                )
-            )
-
-            il.append(
-                il.goto(skip)
-            )
-
-            if not skip_label_found:
-                il.mark_label(skip)
+            self._lift_bound_check(il, source, dest, size_bytes, length, trap_on_failure=False)
         elif instr == 'tas':
             il.append(
                 il.set_reg(1, LLIL_TEMP(0), dest.get_source_il(il), flags='nzvc')
@@ -1109,7 +1149,7 @@ class M68000(Architecture):
                 if not source.value & 0x02: il.append(il.set_flag('v', il.const(1, 0)))
                 if not source.value & 0x04: il.append(il.set_flag('z', il.const(1, 0)))
                 if not source.value & 0x08: il.append(il.set_flag('n', il.const(1, 0)))
-                if not source.value & 0x11: il.append(il.set_flag('x', il.const(1, 0)))
+                if not source.value & 0x10: il.append(il.set_flag('x', il.const(1, 0)))
             else:
                 il.append(
                     dest.get_dest_il(il,
@@ -1126,7 +1166,7 @@ class M68000(Architecture):
                 if source.value & 0x02: il.append(il.set_flag('v', il.const(1, 1)))
                 if source.value & 0x04: il.append(il.set_flag('z', il.const(1, 1)))
                 if source.value & 0x08: il.append(il.set_flag('n', il.const(1, 1)))
-                if source.value & 0x11: il.append(il.set_flag('x', il.const(1, 1)))
+                if source.value & 0x10: il.append(il.set_flag('x', il.const(1, 1)))
             else:
                 il.append(
                     dest.get_dest_il(il,
@@ -1143,7 +1183,7 @@ class M68000(Architecture):
                 if source.value & 0x02: il.append(il.set_flag('v', il.xor_expr(1, il.flag('v'), il.const(1, 1))))
                 if source.value & 0x04: il.append(il.set_flag('z', il.xor_expr(1, il.flag('z'), il.const(1, 1))))
                 if source.value & 0x08: il.append(il.set_flag('n', il.xor_expr(1, il.flag('n'), il.const(1, 1))))
-                if source.value & 0x11: il.append(il.set_flag('x', il.xor_expr(1, il.flag('x'), il.const(1, 1))))
+                if source.value & 0x10: il.append(il.set_flag('x', il.xor_expr(1, il.flag('x'), il.const(1, 1))))
             else:
                 il.append(
                     dest.get_dest_il(il,
@@ -1168,10 +1208,13 @@ class M68000(Architecture):
                 dest.get_dest_il(il,
                     il.rotate_right(4,
                         dest.get_source_il(il),
-                        il.const(1, 16)
+                        il.const(1, 16),
+                        flags='nz'
                     )
                 )
             )
+            il.append(il.set_flag('v', il.const(1, 0)))
+            il.append(il.set_flag('c', il.const(1, 0)))
         elif instr == 'exg':
             il.append(
                 il.set_reg(4, LLIL_TEMP(0), source.get_source_il(il))
@@ -1187,22 +1230,16 @@ class M68000(Architecture):
                 il.append(il.unimplemented())
             elif dest.size == 1:
                 il.append(
-                    il.set_reg(2,
-                        dest.reg,
-                        il.sign_extend(4,
-                            il.reg(1, dest.reg),
-                            flags='nzvc'
-                        )
+                    dest.get_dest_il(
+                        il,
+                        self._extend_il(il, 2, il.reg(1, dest.reg), signed=True, flags='nzvc')
                     )
                 )
             else:
                 il.append(
                     il.set_reg(4,
                         dest.reg,
-                        il.sign_extend(4,
-                            il.reg(2, dest.reg),
-                            flags='nzvc'
-                        )
+                        self._extend_il(il, 4, il.reg(2, dest.reg), signed=True, flags='nzvc')
                     )
                 )
         elif instr == 'extb':
@@ -1210,10 +1247,7 @@ class M68000(Architecture):
             il.append(
                 il.set_reg(4,
                     reg,
-                    il.sign_extend(4,
-                        il.reg(1, reg),
-                        flags='nzvc'
-                    )
+                    self._extend_il(il, 4, il.reg(1, reg), signed=True, flags='nzvc')
                 )
             )
         elif instr == 'movem':
@@ -1271,15 +1305,18 @@ class M68000(Architecture):
                     il.set_reg(4, LLIL_TEMP(0), source.get_address_il(il))
                 )
                 for k in range(len(dest.regs)):
+                    loaded = il.load(size_bytes,
+                        il.add(4,
+                            il.reg(4, LLIL_TEMP(0)),
+                            il.const(4, k*size_bytes)
+                        )
+                    )
+                    if size_bytes == 2:
+                        loaded = self._extend_il(il, 4, loaded, signed=True)
                     il.append(
-                        il.set_reg(size_bytes,
+                        il.set_reg(4 if size_bytes == 2 else size_bytes,
                             dest.regs[k],
-                            il.load(size_bytes,
-                                il.add(4,
-                                    il.reg(4, LLIL_TEMP(0)),
-                                    il.const(4, k*size_bytes)
-                                )
-                            )
+                            loaded
                         )
                     )
                 if isinstance(source, OpRegisterIndirectPostincrement):
@@ -1313,7 +1350,7 @@ class M68000(Architecture):
                     "sp",
                     il.add(4,
                         il.reg(4, "sp"),
-                        il.sign_extend(4, dest.get_source_il(il))
+                        self._extend_il(il, 4, dest.get_source_il(il), signed=True)
                     )
                 )
             )
@@ -1514,7 +1551,7 @@ class M68000(Architecture):
                 il.mark_label(set_dest)
 
                 il.append(
-                    dest.get_dest_il(il, il.const(1, 1))
+                    dest.get_dest_il(il, il.const(1, 0xff))
                 )
 
                 il.append(
@@ -1544,10 +1581,7 @@ class M68000(Architecture):
                 il.set_reg(4, 'sp',
                     il.add(4,
                         il.reg(4, 'sp'),
-                        il.sign_extend(4, il.const(2,
-                            dest.value),
-                            0
-                        )
+                        self._extend_il(il, 4, il.const(2, dest.value), signed=True)
                     )
                 )
             )
@@ -1557,12 +1591,7 @@ class M68000(Architecture):
                 )
             )
         elif instr == 'rte':
-            il.append(
-                il.set_reg(2,
-                    "sr",
-                    il.pop(2)
-                )
-            )
+            self._write_status_register_il(il, il.pop(2), write_sr=True)
             il.append(
                 il.ret(
                     il.pop(4)
@@ -1572,12 +1601,7 @@ class M68000(Architecture):
             # TODO
             il.append(il.unimplemented())
         elif instr == 'rtr':
-            il.append(
-                il.set_reg(2,
-                    'ccr',
-                    il.pop(2)
-                )
-            )
+            self._write_status_register_il(il, il.pop(2), write_sr=False)
             il.append(
                 il.ret(
                     il.pop(4)
@@ -1638,7 +1662,10 @@ class M68000(Architecture):
                     il.mark_label(skip)
         elif instr in ('trap', 'illegal', 'bkpt'):
             il.append(il.system_call())
-        elif instr in ('bgnd', 'nop', 'reset', 'stop'):
+        elif instr == 'stop':
+            self._write_status_register_il(il, source.get_source_il(il), write_sr=True)
+            il.append(il.no_ret())
+        elif instr in ('bgnd', 'nop', 'reset'):
             il.append(il.nop())
         else:
             il.append(il.unimplemented())
@@ -1775,24 +1802,35 @@ class M68000(Architecture):
     def get_flag_write_low_level_il(self, op: LowLevelILOperation, size: int, write_type, flag, operands, il: LowLevelILFunction) -> ExpressionIndex:
         # special
         if flag == 'x':
-            if (op == LowLevelILOperation.LLIL_SUB) or (op == LowLevelILOperation.LLIL_ADD):
-                # subq, add: x is carry
+            if op in (
+                LowLevelILOperation.LLIL_SUB,
+                LowLevelILOperation.LLIL_ADD,
+                LowLevelILOperation.LLIL_ADC,
+                LowLevelILOperation.LLIL_SBB,
+                LowLevelILOperation.LLIL_ASR,
+                LowLevelILOperation.LLIL_LSR,
+                LowLevelILOperation.LLIL_LSL,
+                LowLevelILOperation.LLIL_RLC,
+                LowLevelILOperation.LLIL_RRC,
+            ):
+                # X follows carry/borrow for arithmetic and shifts with a nonzero count.
                 return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
-            # if (op == LowLevelILOperation.LLIL_ASR) or (op == LowLevelILOperation.LLIL_LSR):
-            #     # asr, lsr: if shift is 0, x is unaffected, otherwise x is carry
-            #     # FIXME: shift size isn't always a constant
-            #     if operands[1] != 0:
-            #         FIXME: carry needs to be lifted as well
-            #         return self.get_default_flag_write_low_level_il(op, size, FlagRole.CarryFlagRole, operands, il)
-            #     return il.flag('x')
 
         # carry
         if flag == 'c':
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: c is cleared
                 return il.const(1, 0)
-            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR) or (op == LowLevelILOperation.LLIL_XOR):
+            if op in (
+                LowLevelILOperation.LLIL_AND,
+                LowLevelILOperation.LLIL_OR,
+                LowLevelILOperation.LLIL_XOR,
+                LowLevelILOperation.LLIL_NOT,
+                LowLevelILOperation.LLIL_SX,
+            ):
                 # andi, ori, eori: c is cleared
+                return il.const(1, 0)
+            if op == LowLevelILOperation.LLIL_MUL:
                 return il.const(1, 0)
 
         # overflow
@@ -1800,8 +1838,22 @@ class M68000(Architecture):
             if (op == LowLevelILOperation.LLIL_STORE) or (op == LowLevelILOperation.LLIL_SET_REG):
                 # move, moveq: v is cleared
                 return il.const(1, 0)
-            if (op == LowLevelILOperation.LLIL_AND) or (op == LowLevelILOperation.LLIL_OR) or (op == LowLevelILOperation.LLIL_XOR):
+            if op in (
+                LowLevelILOperation.LLIL_AND,
+                LowLevelILOperation.LLIL_OR,
+                LowLevelILOperation.LLIL_XOR,
+                LowLevelILOperation.LLIL_NOT,
+                LowLevelILOperation.LLIL_SX,
+            ):
                 # andi, ori, eori: v is cleared
+                return il.const(1, 0)
+            if op in (
+                LowLevelILOperation.LLIL_MUL,
+                LowLevelILOperation.LLIL_ROL,
+                LowLevelILOperation.LLIL_ROR,
+                LowLevelILOperation.LLIL_RLC,
+                LowLevelILOperation.LLIL_RRC,
+            ):
                 return il.const(1, 0)
 
 
@@ -1924,6 +1976,7 @@ class M68008(M68000):
 
 class M68010(M68000):
     name = "M68010"
+    isa_level = 1
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -1936,6 +1989,7 @@ class M68010(M68000):
 
 class M68020(M68010):
     name = "M68020"
+    isa_level = 2
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -1957,6 +2011,7 @@ class M68020(M68010):
 
 class M68030(M68020):
     name = "M68030"
+    isa_level = 3
 
     # remove CALLM, RTM
     # add PFLUSH, PFLUSHA, PLOAD, PMOVE, PTEST
@@ -1964,6 +2019,7 @@ class M68030(M68020):
 
 class M68040(M68030):
     name = "M68040"
+    isa_level = 4
     control_registers = {
         0x000: 'sfc',
         0x001: 'dfc',
@@ -2009,6 +2065,7 @@ class M68EC040(M68040):
 
 class M68330(M68010):
     name = "M68330"
+    cpu32 = True
     movem_store_decremented = True
     # AKA CPU32
 

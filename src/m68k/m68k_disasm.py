@@ -45,9 +45,12 @@ class M68KDisasm:
     address_size = None
     control_registers = None
 
-    def __init__(self, address_size, control_registers):
+    def __init__(self, address_size, control_registers, isa_level=0, memory_indirect=False, cpu32=False):
         self.address_size = address_size
         self.control_registers = control_registers
+        self.isa_level = isa_level
+        self.memory_indirect = memory_indirect
+        self.cpu32 = cpu32
 
     def decode_effective_address(self, mode: int, register: int, data: bytes, size: Optional[int] = None) -> Tuple[Optional[Operand], Optional[int]]:
         mode &= 0x07
@@ -122,19 +125,33 @@ class M68KDisasm:
 
             if extra & 0x0100:
                 # full extension word
+                if self.isa_level < 2:
+                    return (None, None)
+
                 bd = 0
                 od = 0
+                base_displacement_size = (extra >> 4) & 3
+                index_suppressed = bool(extra & 0x0040)
+                indirect_selection = extra & 7
+
+                # BD SIZE 00, I/IS 100 with an index, and I/IS 100-111
+                # without an index are reserved encodings.
+                if base_displacement_size == 0:
+                    return (None, None)
+                if (not index_suppressed and indirect_selection == 4) or (
+                    index_suppressed and indirect_selection >= 4
+                ):
+                    return (None, None)
 
                 # base displacement
-                if not (extra >> 7) & 1:
-                    if (extra >> 4) & 3 == 2:
-                        # word base displacement
-                        bd = struct.unpack_from('>h', data, length)[0]
-                        length += 2
-                    elif (extra >> 4) & 3 == 3:
-                        # long base displacement
-                        bd = struct.unpack_from('>L', data, length)[0]
-                        length += 4
+                if base_displacement_size == 2:
+                    # word base displacement
+                    bd = struct.unpack_from('>h', data, length)[0]
+                    length += 2
+                elif (extra >> 4) & 3 == 3:
+                    # long base displacement
+                    bd = struct.unpack_from('>l', data, length)[0]
+                    length += 4
 
                 # outer displacement
                 if extra & 3 == 2:
@@ -143,30 +160,42 @@ class M68KDisasm:
                     length += 2
                 elif extra & 3 == 3:
                     # long outer displacement
-                    od = struct.unpack_from('>L', data, length)[0]
+                    od = struct.unpack_from('>l', data, length)[0]
                     length += 4
 
-                # suppress index register
+                base_reg = None if extra & 0x0080 else reg
+                index_reg = None if index_suppressed else xn
+
+                # The full format requires at least one active address element.
+                if base_reg is None and index_reg is None and base_displacement_size == 1:
+                    return (None, None)
+
+                # No memory indirection.
                 if extra & 7 == 0:
-                    return (OpRegisterIndirectIndex(size, reg, bd, xn, index_size, scale), length)
-                elif (extra >> 6) & 1:
-                    return (OpMemoryIndirect(size, reg, bd, od), length)
-                elif (extra >> 2) & 1:
-                    return (OpMemoryIndirectPostindex(size, reg, bd, xn, index_size, scale, od), length)
+                    return (OpRegisterIndirectIndex(size, base_reg, bd, index_reg, index_size, scale), length)
+
+                if not self.memory_indirect:
+                    return (None, None)
+                if index_reg is None:
+                    return (OpMemoryIndirect(size, base_reg, bd, od), length)
+                elif indirect_selection & 4:
+                    return (OpMemoryIndirectPostindex(size, base_reg, bd, index_reg, index_size, scale, od), length)
                 else:
-                    return (OpMemoryIndirectPreindex(size, reg, bd, xn, index_size, scale, od), length)
+                    return (OpMemoryIndirectPreindex(size, base_reg, bd, index_reg, index_size, scale, od), length)
             else:
                 # brief extension word
                 # 8 bit displacement
                 d8 = extra & 0xff
                 if d8 & 0x80:
                     d8 -= 256
+                if self.isa_level < 2 and not self.cpu32:
+                    scale = 1
                 return (OpRegisterIndirectIndex(size, reg, d8, xn, index_size, scale), length)
 
         return (None, None)
 
     def decode_instruction(self, data: bytes, addr: int) -> Tuple[str, int, Optional[int], Optional[Operand], Optional[Operand], Optional[Operand]]:
-        error_value = ('unimplemented', len(data), None, None, None, None)
+        error_value = ('unimplemented', min(len(data), 2), None, None, None, None)
         if len(data) < 2:
             return error_value
 
@@ -189,10 +218,14 @@ class M68KDisasm:
             if instruction & 0xf9c0 == 0x00c0:
                 # rtm, callm, chk2, cmp2
                 if instruction & 0xfff0 == 0x06c0:
+                    if self.isa_level != 2:
+                        return error_value
                     instr = 'rtm'
                     dest = OpRegisterDirect(SIZE_LONG, Registers[instruction & 15])
                     length = 2
                 elif instruction & 0xffc0 == 0x06c0:
+                    if self.isa_level != 2:
+                        return error_value
                     instr = 'callm'
                     source = OpImmediate(SIZE_BYTE, struct.unpack_from('>B', data, 3)[0])
                     dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[4:], SIZE_BYTE) # check
@@ -200,18 +233,22 @@ class M68KDisasm:
                         return error_value
                     length = 4+extra_dest
                 else:
+                    if self.isa_level < 2 and not self.cpu32:
+                        return error_value
                     size = (instruction >> 9) & 3
                     extra = struct.unpack_from('>H', data, 2)[0]
                     if extra & 0x0800:
                         instr = 'chk2'
                     else:
                         instr = 'cmp2'
-                    source, extra_source = self.decode_effective_address(instruction >> 3, instruction, data[4:], SIZE_BYTE) # check
-                    dest = OpRegisterDirect(size, Registers[(instruction >> 12) & 15])
+                    source, extra_source = self.decode_effective_address(instruction >> 3, instruction, data[4:], size)
+                    dest = OpRegisterDirect(size, Registers[(extra >> 12) & 15])
                     if extra_source is None:
                         return error_value
                     length = 4+extra_source
             elif instruction & 0xffc0 in (0x0ac0, 0x0cc0, 0x0ec0):
+                if self.isa_level < 2:
+                    return error_value
                 if instruction & 0xf9ff == 0x08fc:
                     instr = 'cas2'
                     size = ((instruction >> 9) & 3) - 1
@@ -306,6 +343,8 @@ class M68KDisasm:
                     else:
                         length = 2+extra_dest
             elif instruction & 0xff00 == 0x0e00:
+                if self.isa_level < 1:
+                    return error_value
                 instr = 'moves'
                 extra = struct.unpack_from('>H', data, 2)[0]
                 size = (instruction >> 6) & 3
@@ -353,6 +392,8 @@ class M68KDisasm:
                         instr = 'lea'
                         dest = OpRegisterDirect(SIZE_LONG, Registers[((instruction >> 9) & 7) + 8])
                     else:
+                        if self.isa_level < 2 and not self.cpu32:
+                            return error_value
                         instr = 'extb'
                     size = SIZE_LONG
                 else:
@@ -376,6 +417,8 @@ class M68KDisasm:
                 # move to ccr, clr
                 if instruction & 0xffc0 == 0x42c0:
                     # move to ccr
+                    if self.isa_level < 1:
+                        return error_value
                     instr = 'move'
                     size = SIZE_WORD
                     source = OpRegisterDirect(size, 'ccr')
@@ -405,6 +448,8 @@ class M68KDisasm:
             elif msb in (0x48, 0x4c):
                 # link, nbcd, movem, ext, swap, bkpt, pea, divs, divu, divsl, divul, muls, mulu
                 if instruction & 0xfff8 == 0x4808:
+                    if self.isa_level < 2:
+                        return error_value
                     instr = 'link'
                     size = SIZE_LONG
                     dest, extra_dest = self.decode_effective_address(7, 4, data[2:], size)
@@ -442,6 +487,8 @@ class M68KDisasm:
                     dest, extra_dest = self.decode_effective_address(instruction >> 3, instruction, data[2+extra_source:], SIZE_LONG)
                     skip_ea = True
                 elif instruction & 0xfff8 == 0x4848:
+                    if self.isa_level < 1:
+                        return error_value
                     instr = 'bkpt'
                     source = OpImmediate(SIZE_BYTE, instruction & 7)
                     skip_ea = True
@@ -449,6 +496,8 @@ class M68KDisasm:
                     instr = 'pea'
                     size = SIZE_LONG
                 elif msb == 0x4c:
+                    if self.isa_level < 2 and not self.cpu32:
+                        return error_value
                     size = SIZE_LONG
                     extra_dest = 2
                     extra = struct.unpack_from('>H', data, 2)[0]
@@ -477,6 +526,8 @@ class M68KDisasm:
             elif msb == 0x4a:
                 # bgnd, illegal, tas, tst
                 if instruction == 0x4afa:
+                    if not self.cpu32:
+                        return error_value
                     instr = 'bgnd'
                     skip_ea = True
                 elif instruction == 0x4afc:
@@ -527,6 +578,8 @@ class M68KDisasm:
                     instr = 'rte'
                     skip_ea = True
                 elif instruction == 0x4e74:
+                    if self.isa_level < 1:
+                        return error_value
                     instr = 'rtd'
                     dest, extra_dest = self.decode_effective_address(7, 4, data[2:], SIZE_WORD)
                     skip_ea = True
@@ -540,6 +593,8 @@ class M68KDisasm:
                     instr = 'rtr'
                     skip_ea = True
                 elif instruction & 0xfffe == 0x4e7A:
+                    if self.isa_level < 1:
+                        return error_value
                     instr = 'movec'
                     size = SIZE_LONG
                     extended = struct.unpack_from('>H', data, 2)[0]
@@ -583,6 +638,8 @@ class M68KDisasm:
                     dest = OpRegisterIndirectDisplacement(SIZE_LONG, 'pc', struct.unpack_from('>h', data, 2)[0])
                     length = 4
                 elif instruction & 0xf0ff in (0x50fa, 0x50fb, 0x50fc):
+                    if self.isa_level < 2 and not self.cpu32:
+                        return error_value
                     instr = 'trap'+Condition[(instruction >> 8) & 0xf]
                     if instruction & 7 == 2:
                         length = 4
@@ -626,8 +683,12 @@ class M68KDisasm:
                 val = struct.unpack_from('>h', data, 2)[0]
                 length = 4
             elif val == 0xff:
-                val = struct.unpack_from('>L', data, 2)[0]
-                length = 6
+                if self.isa_level >= 2:
+                    val = struct.unpack_from('>l', data, 2)[0]
+                    length = 6
+                else:
+                    val = -1
+                    length = 2
             else:
                 if val & 0x80:
                     val -= 256
@@ -665,6 +726,8 @@ class M68KDisasm:
                     dest = OpRegisterIndirectPredecrement(SIZE_BYTE, Registers[((instruction >> 9) & 7) + 8])
                     source = OpRegisterIndirectPredecrement(SIZE_BYTE, Registers[(instruction & 7) + 8])
             elif instruction & 0xf130 == 0x8100:
+                if self.isa_level < 2:
+                    return error_value
                 if instruction & 0x0040:
                     instr = 'pack'
                     if instruction & 8:
@@ -777,10 +840,10 @@ class M68KDisasm:
                     source = OpRegisterDirect(size, Registers[(instruction >> 9) & 7])
                     dest = OpRegisterDirect(size, Registers[instruction & 7])
                     if instruction & 0xf1f8 == 0xc148:
-                        source = OpRegisterIndirectPredecrement(size, Registers[((instruction >> 9) & 7) + 8])
-                        dest = OpRegisterIndirectPredecrement(size, Registers[(instruction & 7) + 8])
+                        source = OpRegisterDirect(size, Registers[((instruction >> 9) & 7) + 8])
+                        dest = OpRegisterDirect(size, Registers[(instruction & 7) + 8])
                     if instruction & 0xf1f8 == 0xc188:
-                        dest = OpRegisterIndirectPredecrement(size, Registers[(instruction & 7) + 8])
+                        dest = OpRegisterDirect(size, Registers[(instruction & 7) + 8])
                 length = 2
             else:
                 instr = 'and'
@@ -837,6 +900,8 @@ class M68KDisasm:
                 length = 2+extra_dest
             elif instruction & 0xF8C0 == 0xE8C0:
                 # bit field instructions
+                if self.isa_level < 2:
+                    return error_value
                 # TODO
                 style = (instruction >> 8) & 0x7
                 instr = 'bf'+BitfieldStyle[style]
@@ -862,6 +927,8 @@ class M68KDisasm:
                 length = 2
         elif operation_code == 0xf:
             if instruction & 0xff20 == 0xf420:
+                if self.isa_level < 4:
+                    return error_value
                 instr = 'cpush'
                 length = 2
             elif instruction & 0xff80 == 0xff80:
